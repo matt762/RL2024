@@ -1,0 +1,1 @@
+class FeedForwardNN(nn.Module):
