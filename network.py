@@ -10,14 +10,18 @@ class FeedForwardNN(nn.Module):
         self.layer1 = nn.Linear(in_dim, 64)
         self.layer2 = nn.Linear(64, 64)
         self.layer3 = nn.Linear(64, out_dim)
-        self.relu = nn.ReLU()
+        # self.relu = F.relu()
 
     def forward(self, obs):
         if isinstance(obs, np.ndarray):
             obs = torch.tensor(obs, dtype=torch.float)
+        #elif isinstance(obs, tuple):
+            # Concatenate the elements of the tuple along the first dimension to create a tensor
+        #    obs = torch.tensor(obs, dtype=torch.float).unsqueeze(0)
 
-        activation1 = self.relu(self.layer1(obs))
-        activation2 = self.relu(self.layer2(activation1))
+
+        activation1 = F.relu(self.layer1(obs))
+        activation2 = F.relu(self.layer2(activation1))
         output = self.layer3(activation2)
 
         return output
