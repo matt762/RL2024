@@ -58,6 +58,8 @@ class DQN_Optimizer(object):
         if ( not torch.cuda.is_available() and num_episodes > 50):
             print("The specified number of episodes might be big for optimization on cpu")
         self.episode_cumulative_reward = []
+
+        self.epsilon = param_dict.get("eps_start")
             
         
 
@@ -74,16 +76,19 @@ class DQN_Optimizer(object):
 
 
     def run_optimization(self):
-        for i_episode in tqdm(range(self.num_episodes), desc="Current episode"):
+        episodes_progress = tqdm(range(self.num_episodes))
+        for i_episode in episodes_progress:
             # Init env and get initial state
             state, info = self.env.reset()
             state = torch.tensor(state, dtype = torch.float32, device = self.device).unsqueeze(0)
             episode_reward = 0
             for t in count():
+                episodes_progress.set_description("Current epsilon: {:.2f}".format(self.epsilon))
                 # Select action and collect reward 
                 action = self.select_action(state)
                 observation, reward, terminated, truncated, _ = self.env.step(action.item())
                 episode_reward += reward
+
 
                 reward = torch.tensor([reward], device = self.device)
                 done = terminated or truncated
@@ -155,9 +160,10 @@ class DQN_Optimizer(object):
     def compute_epsilon(self):
         # Compute epsilon with a linear interpolation 
         if self.steps_done > self.param_dict.get("decay_steps"):
-            return self.param_dict.get("eps_end")
+            self.epsilon = self.param_dict.get("eps_end")
         else:
-            return self.param_dict.get("eps_start") - (self.param_dict.get("eps_start") - self.param_dict.get("eps_end"))*(self.steps_done/self.param_dict.get("decay_steps"))
+            self.epsilon = self.param_dict.get("eps_start") - (self.param_dict.get("eps_start") - self.param_dict.get("eps_end"))*(self.steps_done/self.param_dict.get("decay_steps"))
+        return self.epsilon
 
     def plot_rewards(self, moving_avg_width = 1):
         plt.figure()
