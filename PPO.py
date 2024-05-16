@@ -5,6 +5,8 @@ import numpy as np
 from torch.distributions import MultivariateNormal
 from network import FeedForwardNN
 from torch.optim import Adam
+import time
+from torch.distributions import Categorical
 
 # step 3 : in paper do for 1,...N actor equivalent to collect a set of trajectories. One trajectory = 1 actor
 
@@ -16,7 +18,8 @@ class PPO:
         # Extract environment information
         self.env = env
         self.obs_dim = env.observation_space.shape[0]
-        self.act_dim = env.action_space.shape[0]
+        self.act_dim = env.action_space.shape[0] # for continuous env
+        # self.act_dim = 2 # for discrete env just put nb nb act dim = nb possible discrete actions
 
         # Define actor and critic networks
         self.actor = FeedForwardNN(self.obs_dim, self.act_dim)
@@ -29,17 +32,38 @@ class PPO:
         # Create our variable for the matrix. 0.5 is arbitrary.
         self.cov_var = torch.full(size=(self.act_dim,), fill_value=0.5)
         # Cov matrix
-        self.cov_mat = torch.diag(self.cov_var) 
+        self.cov_mat = torch.diag(self.cov_var)
+
+        # This logger will help us with printing out summaries of each iteration
+        self.logger = {
+			'delta_t': time.time_ns(),
+			'actual_time_step': 0,          # timesteps so far
+			'actual_iteration': 0,          # iterations so far
+			'batch_lens': [],       # episodic lengths in batch
+			'batch_rews': [],       # episodic returns in batch
+			'actor_losses': [],     # losses of actor network in current iteration
+		}
         
 
     def learn(self, total_time_steps):
+        print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, ", end='')
+        print(f"{self.timesteps_per_batch} timesteps per batch for a total of {total_time_steps} timesteps")
         actual_time_step = 0
+        actual_iteration = 0
 
         while actual_time_step < total_time_steps:
             batch_obs, batch_acts, batch_log_probs, batch_rewtogo, batch_lens = self.rollout()
 
             # Compute how many timesteps collected this batch
             actual_time_step += np.sum(batch_lens)
+
+            # Increment the number of iterations
+            actual_iteration += 1
+
+			# Logging timesteps so far and iterations so far
+            self.logger['actual_time_step'] = actual_time_step
+            self.logger['actual_iteration'] = actual_iteration
+
 
             # Compute V_{phi, k}
             V, _ = self.evaluate(batch_obs, batch_acts)
@@ -52,8 +76,8 @@ class PPO:
 
             for _ in range(self.nb_epochs_by_iteration):
                 # Compute V_phi and pi_theta(a_t | s_t)
+                #V, current_log_probs, entropy = self.evaluate(batch_obs, batch_acts) # ADD OF ENTROPY
                 V, current_log_probs = self.evaluate(batch_obs, batch_acts)
-
                 # Ratio
                 ratios = torch.exp(current_log_probs - batch_log_probs)
 
@@ -63,6 +87,8 @@ class PPO:
 
                 # Actor and critic loss
                 actor_loss = -(torch.min(surrogate_loss1, surrogate_loss2)).mean() # Objective function to optimize during training / - as we want to max but uses Adam opt which minimized loss
+                #entropy_loss = entropy.mean() #ADD OF ENTROPY
+                #actor_loss = actor_loss - self.entropy_coef * entropy_loss # Add entropy LOSS
                 critic_loss = nn.MSELoss()(V, batch_rewtogo)
 
                 # Calculate gradients and performing backward propagation for actor network
@@ -74,6 +100,16 @@ class PPO:
                 self.critic_optim.zero_grad()
                 critic_loss.backward()
                 self.critic_optim.step()
+
+                # Log actor loss
+                self.logger['actor_losses'].append(actor_loss.detach())
+
+            self._log_summary()
+
+            # Save our model if it's time
+            if actual_iteration % self.save_frequency == 0:
+                torch.save(self.actor.state_dict(), './ppo_actor.pth')
+                torch.save(self.critic.state_dict(), './ppo_critic.pth')
 
 
 
@@ -97,10 +133,22 @@ class PPO:
             # Rewards collecter in this episode
             ep_rews = []
 
+
             obs = self.env.reset()
+
+            max_timesteps = env.spec.max_episode_steps
+            print(f"Maximum number of timesteps per episode: {max_timesteps}")              
+            seed_info = self.env.seed()
+            print("Seed information : ", seed_info)
             done = False
 
-            for episode_t in range(self.max_timesteps_per_episode):     # 1) mais ducoup on a pas problème que là il le fait ici le time_step_batch += 1 ducoup si on dépasse le while il sera fait que après la boucle ???? ou bien ??????
+            for episode_t in range(self.max_timesteps_per_episode):
+                    
+                # If render is specified, render the environment
+                if self.render and (self.logger['actual_iteration'] % self.render_every_i == 0) and len(batch_lens) == 0:
+                #if self.render and (self.logger['actual_time_step'] % 1000 == 0): # CAPTE PAS TROP COMMENT LE RENDER MARCHE (ici pour le cartpole car lent sinon)
+                    self.env.render()
+                         
                 # Increment time step ran in this batch so far
                 time_step_batch += 1
 
@@ -129,6 +177,9 @@ class PPO:
         batch_log_probs = torch.tensor(batch_log_probs, dtype=torch.float)
         batch_rewtogo = self.compute_rewtogo(batch_rews)
 
+        self.logger['batch_rews'] = batch_rews
+        self.logger['batch_lens'] = batch_lens
+
         return batch_obs, batch_acts, batch_log_probs, batch_rewtogo, batch_lens
 
 
@@ -136,13 +187,15 @@ class PPO:
         # Query actor network for a mean action
         mean = self.actor(obs)
         # Create Multivariable Normal Distribution
-        distrib = MultivariateNormal(mean, self.cov_mat)
-
+        distrib = MultivariateNormal(mean, self.cov_mat) # for continuous env
+        #action_probs = torch.nn.functional.softmax(mean, dim=-1) # for discrete env
+        #distrib = Categorical(action_probs) # for discrete env
         # Sample an action from the distribution and get its log prob
-        action = distrib.sample()
+        action = distrib.sample() 
         log_prob = distrib.log_prob(action)
 
-        return action.detach().numpy(), log_prob.detach()
+        return action.detach().numpy(), log_prob.detach() # for continuous env
+        #return action.item(), log_prob.detach() # for discrete env
     
 
     def compute_rewtogo(self, batch_rews):
@@ -164,10 +217,14 @@ class PPO:
 
         # Calculate the log probabilities of batch actions using most recent actor network. This segment of code is similar to that in get_action()
         mean = self.actor(batch_obs)
-        dist = MultivariateNormal(mean, self.cov_mat)
-        log_probs = dist.log_prob(batch_acts)
+        distrib = MultivariateNormal(mean, self.cov_mat) # for continuous env
+        log_probs = distrib.log_prob(batch_acts) # for continuous env
 
-        return V, log_probs
+        #action_probs = torch.nn.functional.softmax(mean, dim=-1) # for discrete env
+        #distrib = Categorical(action_probs) # for discrete env
+        # Sample an action from the distribution and get its log prob
+
+        return V, log_probs #, distrib.entropy()
         
 
     def _init_hyperparameters(self):
@@ -183,20 +240,65 @@ class PPO:
         # Learning rate of Adam
         self.lr = 0.005
 
+        self.save_frequency = 100  # 10 is okey for mountain cars envs
+        self.render = True
+        self.render_every_i = 10 # 10 is okey for mountain cars envs
+        #self.seed = 0
+
+        #self.entropy_coef = 0.01
+
+    def _log_summary(self):
+        # Calculate logging values. I use a few python shortcuts to calculate each value
+        # without explaining since it's not too important to PPO; feel free to look it over,
+        # and if you have any questions you can email me (look at bottom of README)
+        delta_t = self.logger['delta_t']
+        self.logger['delta_t'] = time.time_ns()
+        delta_t = (self.logger['delta_t'] - delta_t) / 1e9
+        delta_t = str(round(delta_t, 2))
+
+        actual_time_step = self.logger['actual_time_step']
+        actual_iteration = self.logger['actual_iteration']
+        avg_ep_lens = np.mean(self.logger['batch_lens'])
+        avg_ep_rews = np.mean([np.sum(ep_rews) for ep_rews in self.logger['batch_rews']])
+        avg_actor_loss = np.mean([losses.float().mean() for losses in self.logger['actor_losses']])
+
+        # Round decimal places for more aesthetic logging messages
+        avg_ep_lens = str(round(avg_ep_lens, 2))
+        avg_ep_rews = str(round(avg_ep_rews, 2))
+        avg_actor_loss = str(round(avg_actor_loss, 5))
+
+        # Print logging statements
+        print(flush=True)
+        print(f"-------------------- Iteration #{actual_iteration} --------------------", flush=True)
+        print(f"Average Episodic Length: {avg_ep_lens}", flush=True)
+        print(f"Average Episodic Return: {avg_ep_rews}", flush=True)
+        print(f"Average Loss: {avg_actor_loss}", flush=True)
+        print(f"Timesteps So Far: {actual_time_step}", flush=True)
+        print(f"Iteration took: {delta_t} secs", flush=True)
+        print(f"------------------------------------------------------", flush=True)
+        print(flush=True)
+
+		# Reset batch-specific logging data
+        self.logger['batch_lens'] = []
+        self.logger['batch_rews'] = []
+        self.logger['actor_losses'] = []
+
 #!pip install gym==0.25.2
 #!pip install gym-notices==0.0.8
 import gym
 from gym import Env
+import gymnasium
 # For visualization
 #from gym.wrappers.monitoring import video_recorder
 #from IPython.display import HTML
 #from IPython import display
 #import glob
 #import matplotlib as plt
-env = gym.make('Pendulum-v1', g=9.81)
-env.seed(0)
+#env = gym.make('Pendulum-v1', g=9.81)
+env = gym.make('MountainCarContinuous-v0')
+#env.seed(0)
 model = PPO(env)
-model.learn(1000)
+model.learn(200000)
 
 '''
 # Create the plot
