@@ -19,8 +19,6 @@ from IPython import display
 
 from eval_policy import eval_policy
 
-device = torch.device("cpu")
-
 class NeuralNet(torch.nn.Module):
     def __init__(self, input_size, output_size, activation, layers=[32,32,16]):
         super().__init__()
@@ -83,8 +81,8 @@ def generate_single_episode(env, actor):
         
     for t in range(max_t):
         state = torch.from_numpy(state).float().unsqueeze(0)
-        probs = actor.forward(Variable(state)) # get each action choice probability with the current policy network
-        action = np.random.choice(env.action_space.n, p=np.squeeze(probs.detach().numpy())) # probablistic
+        probs = actor.forward(Variable(state).to(device)) # get each action choice probability with the current policy network
+        action = np.random.choice(env.action_space.n, p=np.squeeze(probs.cpu().detach().numpy())) # probablistic
         # action = np.argmax(probs.detach().numpy()) # greedy
         
         # compute the log_prob to use this in parameter update
@@ -120,8 +118,8 @@ def generate_multiple_episodes(env, actor, max_batch_size=500):
         reward_per_epi = []
         for t in range(max_t):
             state = torch.from_numpy(state).float().unsqueeze(0)
-            probs = actor.forward(Variable(state)) # get each action choice probability with the current policy network
-            action = np.random.choice(env.action_space.n, p=np.squeeze(probs.detach().numpy())) # probablistic
+            probs = actor.forward(Variable(state).to(device)) # get each action choice probability with the current policy network
+            action = np.random.choice(env.action_space.n, p=np.squeeze(probs.cpu().detach().numpy())) # probablistic
             # action = np.argmax(probs.detach().numpy()) # greedy
             
             # compute the log_prob to use this in parameter update
@@ -151,8 +149,23 @@ def evaluate_policy(env, actor):
     _, _, rewards, _ = generate_single_episode(env, actor)
     return np.sum(rewards)
 
+def compute_gae(next_value, rewards, masks, values, gamma=0.99, tau=0.95):
+    # Generalized advantage estimation
 
-def train_PPO_multi_epi(env, actor, policy_optimizer, critic, value_optimizer, num_epochs, clip_val=0.2, gamma=0.99, max_batch_size=100, entropy_coef=0.1, normalize_ad=True, add_entropy=True):
+    next_value = next_value.unsqueeze(0)
+    values = torch.cat((values, next_value), dim=0)
+    
+    gae = 0
+    returns = torch.zeros_like(rewards)
+    for step in reversed(range(len(rewards))):
+        delta = rewards[step] + gamma * values[step + 1] * masks[step] - values[step]
+        gae = delta + gamma * tau * masks[step] * gae
+        returns[step] = gae + values[step]
+        
+    return returns
+
+
+def train_PPO_multi_epi(env, actor, policy_optimizer, critic, value_optimizer, num_epochs, epsilon=0.2, gamma=0.99, max_batch_size=100, entropy_coef=0.1, normalize_ad=True, add_entropy=True, mse_coeff=0.5):
 
     # Generate an episode with the current policy network
     states, actions, rewards, log_probs = generate_multiple_episodes(env, actor, max_batch_size=max_batch_size)
@@ -165,7 +178,7 @@ def train_PPO_multi_epi(env, actor, policy_optimizer, critic, value_optimizer, n
     log_probs = torch.FloatTensor(log_probs).view(-1,1).to(device)
 
     # Compute total discounted return at each time step in each episode
-    Gs = compute_R2G_per_episode(rewards, gamma).view(-1,1)
+    Gs = compute_R2G_per_episode(rewards, gamma).view(-1,1).to(device)
     
     # Compute the advantage
     states = states.to(device)
@@ -189,16 +202,18 @@ def train_PPO_multi_epi(env, actor, policy_optimizer, critic, value_optimizer, n
         
         # Calculate two surrogate loss terms in cliped loss
         surr1 = ratios * A_k
-        surr2 = torch.clamp(ratios, 1-clip_val, 1+clip_val) * A_k
+        surr2 = torch.clamp(ratios, 1-epsilon, 1+epsilon) * A_k
         
         # Caluculate entropy
         entropy = 0
         if add_entropy:
             entropy = torch.distributions.Categorical(probs).entropy()
-            entropy = torch.tensor([[e] for e in entropy])
+            entropy = torch.tensor([[e] for e in entropy]).to(device)
+            
+        mse_loss = (V - Gs).pow(2)
         
         # Calculate clipped loss value
-        actor_loss = (-torch.min(surr1, surr2) - entropy_coef * entropy).mean() # Need negative sign to run Gradient Ascent
+        actor_loss = -(torch.min(surr1, surr2) - mse_coeff * mse_loss + entropy_coef * entropy).mean() # Need negative sign to run Gradient Ascent
         
         # Update policy network
         policy_optimizer.zero_grad()
@@ -213,28 +228,22 @@ def train_PPO_multi_epi(env, actor, policy_optimizer, critic, value_optimizer, n
         
     return actor, critic
 
-# Create the environment.
-env_name = "CartPole-v1"
-#env = gym.make(env_name, render_mode='human')
-env = gym.make(env_name)
-nA = env.action_space.n
-nS = 4
-
 def train(env, nA, nS):
     # Define parameter values
-    num_train_ite = 1000
-    num_seeds = 5 # fit model with 5 different seeds and plot average performance of 5 seeds
+    num_train_ite = 500
+    num_seeds = 1 # fit model with 5 different seeds and plot average performance of 5 seeds
     num_epochs = 10 # how many times we iterate the entire training dataset passing through the training
     eval_freq = 50 # run evaluation of policy at each eval_freq trials
     eval_epi_index = num_train_ite//eval_freq # use to create x label for plot
     returns = np.zeros((num_seeds, eval_epi_index))
     gamma = 0.99 # discount factor
-    clip_val = 0.2 # hyperparameter epsilon in clip objective
+    epsilon = 0.2 # hyperparameter epsilon in clip objective
 
     # Define parameter values
     returns = np.zeros((num_seeds, eval_epi_index))
     max_batch_size = 100
     entropy_coef = 0.1
+    mse_coeff = 0.3
     normalize_ad = True
     add_entropy = True
 
@@ -245,14 +254,17 @@ def train(env, nA, nS):
         reward_means = []
 
         # Define policy and value networks
-        actor = NeuralNet(nS, nA, torch.nn.Softmax())
+        actor = NeuralNet(nS, nA, torch.nn.Softmax()).to(device)
         actor_optimizer = optim.Adam(actor.parameters(), lr=policy_lr)
-        critic = NeuralNet(nS, 1, torch.nn.ReLU())
+        critic = NeuralNet(nS, 1, torch.nn.ReLU()).to(device)
         critic_optimizer = optim.Adam(critic.parameters(), lr=baseline_lr)
+        
+        total_reward = np.zeros(num_train_ite)
         
         for m in range(num_train_ite):
             # Train networks with PPO
-            actor, critic = train_PPO_multi_epi(env, actor, actor_optimizer, critic, critic_optimizer, num_epochs, clip_val=clip_val, gamma=gamma, max_batch_size=max_batch_size, entropy_coef=entropy_coef, normalize_ad=normalize_ad, add_entropy=add_entropy)
+            actor, critic = train_PPO_multi_epi(env, actor, actor_optimizer, critic, critic_optimizer, num_epochs, epsilon=epsilon, gamma=gamma, max_batch_size=max_batch_size, entropy_coef=entropy_coef, normalize_ad=normalize_ad, add_entropy=add_entropy, mse_coeff=mse_coeff)
+            total_reward[m] = evaluate_policy(env, actor)
             if m % eval_freq == 0:
                 print("Episode: {}".format(m))
                 G = np.zeros(20)
@@ -267,6 +279,12 @@ def train(env, nA, nS):
                 
                 torch.save(actor.state_dict(), './ppo_actor.pth')
                 torch.save(critic.state_dict(), './ppo_critic.pth')
+        
+        plt.figure()
+        plt.plot(total_reward)
+        plt.xlabel('Episode', fontsize = 15)
+        plt.ylabel('Total reward per episode', fontsize = 15)
+        plt.show()
                 
         returns[i] = np.array(reward_means)
 
@@ -302,6 +320,15 @@ def test(env, nA, nS):
 	# ppo.py since it only contains the training algorithm. The model/policy itself exists
 	# independently as a binary file that can be loaded in with torch.
     eval_policy(policy=policy, env=env, render=True)
+
+# Create the environment.
+env_name = "CartPole-v1"
+#env = gym.make(env_name, render_mode='human')
+env = gym.make(env_name)
+nA = env.action_space.n
+nS = 4  
+
+device = torch.device("cpu")
 
 # Read the argument in input of the program
 args = sys.argv
