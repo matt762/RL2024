@@ -8,6 +8,7 @@ class ReplayMemory(object):
 
     def __init__(self, N):
         self.memory = deque([], maxlen=N)
+        self.size = N
 
     def push(self, *args):
         self.memory.append(Transition(*args))

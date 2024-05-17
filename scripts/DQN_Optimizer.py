@@ -26,7 +26,7 @@ class DQN_Optimizer(object):
     # Implementation of Deep Q learning based on https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html tutorial
     # with some adaptations to fit better the original algorithm from the paper 
     # "Playing Atari with Deep Reinforcement Learning, Mnih et al." https://arxiv.org/abs/1312.5602
-    def __init__(self, env, replay_memory_size = 10000, param_dict = None, num_episodes = 50):
+    def __init__(self, env, replay_memory_size = 10000, param_dict = None):
         # Initialize gymnasium environment
         self.env = env
         n_actions = env.action_space.n
@@ -35,6 +35,7 @@ class DQN_Optimizer(object):
 
         # Initialize the DQnetwork 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("pytorch will run on {}".format(self.device))
         self.policy_network = DQN(n_observations, n_actions).to(self.device)
         self.target_network = DQN(n_observations, n_actions).to(self.device)
         self.target_network.load_state_dict(self.policy_network.state_dict())
@@ -45,17 +46,19 @@ class DQN_Optimizer(object):
                 "eps_start" : 1,
                 "eps_end" : 0.1,
                 "decay_steps" : 1000,
-                "tau" : 0.005,
                 "learning_rate" : 1e-3,
+                "train_episodes" : 200,
+                "test_episodes" : 20,
                 }
         else:
             self.param_dict = param_dict
         self.memory = ReplayMemory(replay_memory_size)
         self.steps_done = 0
         self.episode_durations = []
+        self.epsilons = []
+        self.epsilon = param_dict.get("eps_start")
 
-        self.num_episodes = num_episodes
-        if ( not torch.cuda.is_available() and num_episodes > 50):
+        if ( not torch.cuda.is_available() and param_dict.get("train_episodes") > 50):
             print("The specified number of episodes might be big for optimization on cpu")
         self.episode_cumulative_reward = []
             
@@ -64,7 +67,7 @@ class DQN_Optimizer(object):
 
     def set_optimizer(self, optimizer: str = "adam"):
         if(optimizer == "adam"):
-            self.optimizer = optim.AdamW(self.policy_network.parameters(), lr = self.param_dict.get("learning_rate"), amsgrad=True)
+            self.optimizer = optim.Adam(self.policy_network.parameters(), lr = self.param_dict.get("learning_rate"))
         elif (optimizer == "sgd"):
             self.optimizer = optim.SGD(self.policy_network.parameters(), lr = self.param_dict.get("learning_rate"))
         elif (optimizer == "RMSProp"):
@@ -74,19 +77,24 @@ class DQN_Optimizer(object):
 
 
     def run_optimization(self):
-        for i_episode in tqdm(range(self.num_episodes), desc="Current episode"):
+        print("Filling buffer memory...")
+        self.fill_buffer_memory()
+        print("Buffer memory filled, size: {}".format(len(self.memory)))
+        mean_rewards = []
+        train_progress = tqdm(range(self.param_dict.get("train_episodes")))
+        for i_episode in train_progress:
             # Init env and get initial state
-            state, info = self.env.reset()
+            state, _ = self.env.reset()
             state = torch.tensor(state, dtype = torch.float32, device = self.device).unsqueeze(0)
             episode_reward = 0
             for t in count():
+                train_progress.set_description("Current train episode eps : {:.2f}".format(self.epsilon))
                 # Select action and collect reward 
-                action = self.select_action(state)
+                action = self.select_eps_greedy_action(state)
                 observation, reward, terminated, truncated, _ = self.env.step(action.item())
                 episode_reward += reward
-
+                self.steps_done += 1
                 reward = torch.tensor([reward], device = self.device)
-                done = terminated or truncated
 
                 if terminated: 
                     next_state = None
@@ -97,41 +105,71 @@ class DQN_Optimizer(object):
                 self.memory.push(state,action, next_state, reward)
 
                 state = next_state
-                self.optimization_step()
+                self.minibatch_update()
 
-                target_network_state_dict = self.target_network.state_dict()
-                policy_network_state_dict = self.policy_network.state_dict()
-                for key in policy_network_state_dict:
-                    target_network_state_dict[key] = policy_network_state_dict[key] * self.param_dict.get("tau") + target_network_state_dict[key] * (1-self.param_dict.get("tau"))
-                    self.target_network.load_state_dict(target_network_state_dict)
 
-                if done:
+                if terminated or truncated:
                     self.episode_durations.append(t+1)
                     self.episode_cumulative_reward.append(episode_reward)
+                    self.epsilons.append(self.epsilon)
                     break
+            self.update_epsilon()
 
+            ## At the end of 10 episodes, run 20 episodes for test
+            if i_episode % 10 == 0:
+                test_rewards = self.test()
+                reward_mean = test_rewards.mean()
+                mean_rewards.append(reward_mean)
         print("Optimization complete")
+        return mean_rewards
 
 
-    def select_action(self,state):
+    def select_eps_greedy_action(self,state,eps = None):
         sample = random.random()
-        eps_threshold = self.compute_epsilon()
-        self.steps_done += 1
+        if eps == None:
+            eps_threshold = self.epsilon
+        else:
+            eps_threshold = eps
         if sample > eps_threshold:
             # exploit if >eps
             with torch.no_grad():
-                return self.policy_network(state).max(1).indices.view(1,1)
+                return torch.argmax(self.policy_network(state)).reshape(1,1)
         else:
             # explore otherwise
             return torch.tensor([[self.env.action_space.sample()]], device = self.device, dtype=torch.long)
         
 
-    def optimization_step(self):
+    def select_random_action(self):
+        return torch.tensor(self.env.action_space.sample()).reshape(1,1)
+
+    def fill_buffer_memory(self):
+        terminated = False
+        truncated = False
+        state, _ = self.env.reset()
+        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+        for i in range(self.memory.size):
+            if terminated or truncated:
+                state, _ = self.env.reset()
+                state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+            
+            action = self.select_random_action()
+            next_state, reward, terminated, truncated, _ = self.env.step(action.item())
+            reward = torch.tensor([reward])
+            
+
+            if terminated:
+                next_state = None
+            else:
+                next_state = torch.tensor(next_state, dtype=torch.float32).unsqueeze(0)
+
+            self.memory.push(state, action, next_state, reward)
+            state = next_state
+
+    def minibatch_update(self):
         if len(self.memory) < self.param_dict.get("batch_size"):
             return
         transitions = self.memory.sample(self.param_dict.get("batch_size"))
         batch = Transition(*zip(*transitions))
-
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device = self.device, dtype = torch.bool)
         non_final_next_states = torch.cat([s for s in batch.next_state if s is not None])
         state_batch = torch.cat(batch.state)
@@ -144,7 +182,7 @@ class DQN_Optimizer(object):
             next_state_values[non_final_mask] = self.target_network(non_final_next_states).max(1).values
         expected_state_action_values = (next_state_values*self.param_dict["gamma"] + reward_batch)
 
-        criterion = nn.SmoothL1Loss()
+        criterion = nn.MSELoss()
         loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
         self.optimizer.zero_grad()
@@ -152,12 +190,45 @@ class DQN_Optimizer(object):
         # torch.nn.utils.clip_grad_value_(self.policy_network.parameters(), 100)
         self.optimizer.step()
 
-    def compute_epsilon(self):
-        # Compute epsilon with a linear interpolation 
-        if self.steps_done > self.param_dict.get("decay_steps"):
-            return self.param_dict.get("eps_end")
+        if self.steps_done%self.param_dict.get("steps_between_updates") == 0:
+            self.target_network.load_state_dict(self.policy_network.state_dict())
+
+    # def update_epsilon(self):
+    #     # Compute epsilon with a linear interpolation 
+    #     if self.steps_done > self.param_dict.get("decay_steps"):
+    #         self.epsilon = self.param_dict.get("eps_end")
+    #     else:
+    #         # self.epsilon = self.param_dict.get("eps_start") - (self.param_dict.get("eps_start") - self.param_dict.get("eps_end"))*(self.steps_done/self.param_dict.get("decay_steps"))
+    #         self.epsilon = self.epsilon*self.param_dict.get("eps_decay")
+    #     return self.epsilon
+    
+    def update_epsilon(self):
+        # Compute epsilon with a linear interpolation $
+
+        if self.epsilon > self.param_dict.get("eps_end"):
+            self.epsilon = self.epsilon*self.param_dict.get("eps_decay")
         else:
-            return self.param_dict.get("eps_start") - (self.param_dict.get("eps_start") - self.param_dict.get("eps_end"))*(self.steps_done/self.param_dict.get("decay_steps"))
+            self.epsilon = self.param_dict.get("eps_end")
+        return self.epsilon
+
+    def test(self):
+        num_test_episodes = self.param_dict.get("test_episodes")
+        rewards_test = np.zeros(num_test_episodes)
+        test_progress = tqdm(range(num_test_episodes),leave=False)
+        for i in test_progress:
+            state, _ = self.env.reset()            
+            episode_rewards = 0
+            for t in count():
+                state = torch.from_numpy(state).float().unsqueeze(0)
+                action = self.select_eps_greedy_action(state, eps=0)
+                state, reward, terminated, truncated, _ = self.env.step(action.item())
+                episode_rewards += reward
+                if terminated or truncated:
+                    break
+            rewards_test[i] = episode_rewards
+            test_progress.set_description("Current test episode reward: {}".format(episode_rewards))
+        return rewards_test
+
 
     def plot_rewards(self, moving_avg_width = 1):
         plt.figure()
@@ -175,19 +246,12 @@ class DQN_Optimizer(object):
         plt.show()
 
 
-    def plot_durations(self, moving_avg_width = 1):
+    def plot_epsilons(self):
         plt.figure()
-        plt.title("Duration of episodes") 
+        plt.title("Epsilon") 
         plt.xlabel("Episode") 
-        plt.ylabel("Duration")
-        plt.plot(self.episode_durations)
-
-        if moving_avg_width > 1:
-            # https://stackoverflow.com/questions/11352047/finding-moving-average-from-data-points-in-python
-            cum_reward = np.cumsum(self.episode_durations)
-            moving_average = (cum_reward[moving_avg_width:] - cum_reward[:-moving_avg_width]) / moving_avg_width
-            plt.plot(moving_average)
-            
+        plt.ylabel("Value")
+        plt.plot(self.epsilons)
         plt.show()
 
     def plot_avg_step_reward(self, moving_avg_width = 1):
