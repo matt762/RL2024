@@ -264,14 +264,14 @@ class PPO:
 
         plt.tight_layout()
         name = str(self.exploration_noise) + '_' + str(self.ucb_bonus_coef) + '_' + str(self.entropy_coef) + '_' + str(self.clip) + '.png'
-        location = './plots_pendulum/' + name
+        location = './plot_cartpole/' + name
         plt.savefig(location)
         
     def _init_hyperparameters(self, noise = 0.1, ucb = 0.1, entropy=0.01, clip=0.2, render=False):
         self.timesteps_per_batch = 4600
         self.max_timesteps_per_episode = 2000
         self.gamma = 0.99
-        self.nb_epochs_by_iteration = 5
+        self.nb_epochs_by_iteration = 10
         self.clip = clip
         self.lr = 0.005
         self.save_frequency = 100
@@ -282,13 +282,15 @@ class PPO:
         self.entropy_coef = entropy
 
 if __name__ == "__main__":
-    env = gym.make('Pendulum-v1')
+    env = gym.make('CartPole-v1')
     model = PPO(env)
     
-    for noise in [0, 0.05, 0.1, 0.2, 0.3]:
-        for ucb in [0, 0.05, 0.1, 0.2, 0.3]:
-            for entropy in [0, 0.005, 0.01, 0.02, 0.03]:
-                for clip in [0.1, 0.2, 0.3]:
-                    print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}")
-                    model._init_hyperparameters(noise, ucb, entropy, clip, render=False)
-                    model.learn(500000)
+    noise = 0
+    ucb = 0
+    entropy = 0
+    clip = 0.2
+    
+    for entropy in [0, 0.05, 0.1, 0.2, 0.3]:
+        print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}")
+        model._init_hyperparameters(noise, ucb, entropy, clip, render=False)
+        model.learn(500000)
