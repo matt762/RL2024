@@ -10,6 +10,7 @@ from collections import defaultdict
 import os
 import torch.nn.functional as F
 import tqdm
+from gym import Env
 
 class FeedForwardNN(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -35,7 +36,7 @@ class FeedForwardNN(nn.Module):
         return output
 
 class PPO:
-    def __init__(self, env):
+    def __init__(self, env : Env):
         self.env = env
         self._init_hyperparameters()
         
@@ -280,7 +281,7 @@ class PPO:
         self.exploration_noise = noise
         self.ucb_bonus_coef = ucb
         self.entropy_coef = entropy
-
+'''
 if __name__ == "__main__":
     env = gym.make('Pendulum-v1')
     model = PPO(env)
@@ -292,3 +293,17 @@ if __name__ == "__main__":
                     print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}")
                     model._init_hyperparameters(noise, ucb, entropy, clip, render=False)
                     model.learn(500000)
+'''
+
+if __name__ == "__main__":
+    env = gym.make('Pendulum-v1')
+    print(type(env))
+    model = PPO(env)
+    
+    for noise in [0.1]:
+        for ucb in [0.2]:
+            for entropy in [0.01]:
+                for clip in [0.2]:
+                    print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}")
+                    model._init_hyperparameters(noise, ucb, entropy, clip, render=False)
+                    model.learn(20000)
