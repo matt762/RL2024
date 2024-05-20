@@ -61,6 +61,8 @@ class DQN_Optimizer(object):
         if ( not torch.cuda.is_available() and param_dict.get("train_episodes") > 50):
             print("The specified number of episodes might be big for optimization on cpu")
         self.episode_cumulative_reward = []
+
+        self.epsilon = param_dict.get("eps_start")
             
         
 
