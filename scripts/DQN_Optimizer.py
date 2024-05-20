@@ -76,11 +76,12 @@ class DQN_Optimizer(object):
             print("invalid optimizer, please use : ...")
 
 
-    def run_optimization(self):
-        print("Filling buffer memory...")
-        self.fill_buffer_memory()
-        print("Buffer memory filled, size: {}".format(len(self.memory)))
-        mean_rewards = []
+    def run_optimization(self, fill_rp_memory = True):
+        if fill_rp_memory:
+            print("Filling buffer memory...")
+            self.fill_buffer_memory()
+            print("Buffer memory filled, size: {}".format(len(self.memory)))
+        mean_rewards_test = []
         train_progress = tqdm(range(self.param_dict.get("train_episodes")))
         for i_episode in train_progress:
             # Init env and get initial state
@@ -119,9 +120,9 @@ class DQN_Optimizer(object):
             if i_episode % 10 == 0:
                 test_rewards = self.test()
                 reward_mean = test_rewards.mean()
-                mean_rewards.append(reward_mean)
+                mean_rewards_test.append(reward_mean)
         print("Optimization complete")
-        return mean_rewards
+        return mean_rewards_test
 
 
     def select_eps_greedy_action(self,state,eps = None):
@@ -140,27 +141,27 @@ class DQN_Optimizer(object):
         
 
     def select_random_action(self):
-        return torch.tensor(self.env.action_space.sample()).reshape(1,1)
+        return torch.tensor(self.env.action_space.sample(), device = self.device).reshape(1,1)
 
     def fill_buffer_memory(self):
         terminated = False
         truncated = False
         state, _ = self.env.reset()
-        state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+        state = torch.tensor(state, dtype=torch.float32, device= self.device).unsqueeze(0)
         for i in range(self.memory.size):
             if terminated or truncated:
                 state, _ = self.env.reset()
-                state = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+                state = torch.tensor(state, dtype=torch.float32, device = self.device).unsqueeze(0)
             
             action = self.select_random_action()
             next_state, reward, terminated, truncated, _ = self.env.step(action.item())
-            reward = torch.tensor([reward])
+            reward = torch.tensor([reward], device = self.device)
             
 
             if terminated:
                 next_state = None
             else:
-                next_state = torch.tensor(next_state, dtype=torch.float32).unsqueeze(0)
+                next_state = torch.tensor(next_state, dtype=torch.float32, device = self.device).unsqueeze(0)
 
             self.memory.push(state, action, next_state, reward)
             state = next_state
@@ -192,18 +193,9 @@ class DQN_Optimizer(object):
 
         if self.steps_done%self.param_dict.get("steps_between_updates") == 0:
             self.target_network.load_state_dict(self.policy_network.state_dict())
-
-    # def update_epsilon(self):
-    #     # Compute epsilon with a linear interpolation 
-    #     if self.steps_done > self.param_dict.get("decay_steps"):
-    #         self.epsilon = self.param_dict.get("eps_end")
-    #     else:
-    #         # self.epsilon = self.param_dict.get("eps_start") - (self.param_dict.get("eps_start") - self.param_dict.get("eps_end"))*(self.steps_done/self.param_dict.get("decay_steps"))
-    #         self.epsilon = self.epsilon*self.param_dict.get("eps_decay")
-    #     return self.epsilon
     
     def update_epsilon(self):
-        # Compute epsilon with a linear interpolation $
+        # Update epsilon decay using a product
 
         if self.epsilon > self.param_dict.get("eps_end"):
             self.epsilon = self.epsilon*self.param_dict.get("eps_decay")
@@ -219,7 +211,7 @@ class DQN_Optimizer(object):
             state, _ = self.env.reset()            
             episode_rewards = 0
             for t in count():
-                state = torch.from_numpy(state).float().unsqueeze(0)
+                state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
                 action = self.select_eps_greedy_action(state, eps=0)
                 state, reward, terminated, truncated, _ = self.env.step(action.item())
                 episode_rewards += reward
