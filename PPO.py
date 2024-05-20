@@ -147,7 +147,7 @@ class PPO:
                 ep_dones = []
 
             ep_rews = []           
-            obs = self.env.reset()
+            obs = self.env.reset(seed=42)
             done = False
 
             for episode_t in range(self.max_timesteps_per_episode):
@@ -443,16 +443,16 @@ if __name__ == "__main__":
 '''
 
 if __name__ == "__main__":
-    env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
     model = PPO(env)
     
-    for noise in [0.1]:
-        for ucb in [0, 0.05, 0.1, 0.2, 0.5]:
-            for entropy in [0, 0.005, 0.01, 0.02, 0.03]:
+    for noise in [0.05, 0.1]:
+        for ucb in [0.05, 0.1]:
+            for entropy in [0.005, 0.01]:
                 for clip in [0.2]:
                     for beta in [0, 0.2, 0.5, 1]:
-                        for coloured_noise in [True, False]:
+                        for coloured_noise in [True]:
                             for use_gae in [True, False]:
                                 print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}, Beta_coloured_noise: {beta}, Coloured noise or not : {coloured_noise}, use_gae: {use_gae}")
                                 model._init_hyperparameters(noise, ucb, entropy, clip, render=False, lr=0.00025, beta=beta, coloured_noise=coloured_noise, use_gae=use_gae) # use lr = 0.00025 or 0.0005
-                                model.learn(500000)
+                                model.learn(200000)
