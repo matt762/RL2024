@@ -70,14 +70,13 @@ class PPO:
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, {self.timesteps_per_batch} timesteps per batch for a total of {total_time_steps} timesteps")
         actual_time_step = 0
         actual_iteration = 0
-
-        self.set_seed(42) # set constante seed for now
         
         while actual_time_step < total_time_steps:
             if not self.use_gae:
                 batch_obs, batch_acts, batch_log_probs, batch_rewtogo, batch_lens = self.rollout()
             else:
                 batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones = self.rollout()
+                _, _, _, ucb = self.evaluate(batch_obs, batch_acts)
                 Adv_k = self.compute_gae(batch_rews, batch_vals, batch_dones)
                 V = self.critic(batch_obs).squeeze()
                 batch_rewtogo = Adv_k + V.detach() # VOIR OU IL FAIT CA DEMAINLA SUITE
@@ -89,20 +88,21 @@ class PPO:
             self.logger['actual_iteration'] = actual_iteration
 
             if not self.use_gae:
-                V, _, _ = self.evaluate(batch_obs, batch_acts)
+                V, _, _, ucb = self.evaluate(batch_obs, batch_acts)
                 Adv_k = batch_rewtogo - V.detach()
                 Adv_k = (Adv_k - Adv_k.mean()) / (Adv_k.std() + 1e-10)
 
             for _ in range(self.nb_epochs_by_iteration):
-                V, current_log_probs, entropy = self.evaluate(batch_obs, batch_acts)
+                #print("seed = ", self.env.seed())
+                V, current_log_probs, entropy, _ = self.evaluate(batch_obs, batch_acts)
                 ratios = torch.exp(current_log_probs - batch_log_probs)  # TO CHECK
                 surrogate_loss1 = ratios * Adv_k
                 surrogate_loss2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * Adv_k
                 
                 #critic_loss = nn.MSELoss()(V, batch_rewtogo)
                 critic_loss = F.mse_loss(V, batch_rewtogo) # to test if diff
-                #actor_loss = -(torch.min(surrogate_loss1, surrogate_loss2) + self.entropy_coef * entropy).mean() # METHOD 1 ? MATTEO
-                actor_loss = -torch.min(surrogate_loss1, surrogate_loss2).mean() - self.entropy_coef * entropy.mean() # METHOD 2 JEAN ?
+                actor_loss = -(torch.min(surrogate_loss1, surrogate_loss2) + self.entropy_coef * entropy).mean() # METHOD 1 JUSTE CAR EXPECTATION DE TOUT SELON PAPER
+                #actor_loss = -torch.min(surrogate_loss1, surrogate_loss2).mean() - self.entropy_coef * entropy.mean() # METHOD 2 JEAN ?
 
                 self.actor_optim.zero_grad()
                 actor_loss.backward(retain_graph=True)
@@ -174,7 +174,8 @@ class PPO:
                 batch_acts.append(action)
                 batch_log_probs.append(log_prob)
                 
-                self.state_visit_count[tuple(obs)] += 1
+                obs_key = tuple(int(np.round(o, decimals=2)*100) for o in obs)
+                self.state_visit_count[obs_key] += 1
 
                 if done:
                     break
@@ -273,6 +274,7 @@ class PPO:
         noise_fft = np.fft.fft(white_noise)
         colored_noise_fft = noise_fft * amplitude
         colored_noise = np.fft.ifft(colored_noise_fft).real
+        colored_noise *= 1e-11
         return colored_noise
 
 # try to use gae
@@ -311,7 +313,12 @@ class PPO:
     def evaluate(self, batch_obs, batch_acts):
         V = self.critic(batch_obs).squeeze()
         mean = self.actor(batch_obs)
-        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(obs.numpy())] for obs in batch_obs])
+        #state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(obs.numpy())] for obs in batch_obs])
+        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs)] for obs in batch_obs]) # to change  according to the observation system
+        #state_visit_count = []
+        #for obs in batch_obs:
+        #    obs_key = tuple(int(np.round(o, decimals=2)*100) for o in obs)
+        #    state_visit_count[obs_key] += 1
         ucb_bonus = self.ucb_bonus_coef / torch.sqrt(state_visit_count_tensor + 1)
 
         if self.continuous:
@@ -323,26 +330,11 @@ class PPO:
 
         log_probs = distrib.log_prob(batch_acts)
         entropy = distrib.entropy() #.mean() je crois faut enlever le mean() là parce qu'on le fait dans le learn (matteo l'a mis je l'enlève)
-
-        return V + ucb_bonus, log_probs, entropy
+        torch.set_printoptions(profile="full")
+        #print("state visited ", state_visit_count_tensor, " ucb_bonus ", ucb_bonus, " entropy ", entropy*self.entropy_coef)
+        torch.set_printoptions(profile="default") # reset
+        return V, log_probs, entropy, ucb_bonus
     
-    def set_seed(self, seed):
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        random.seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-        # Set the seed for the gym environment if applicable
-        if hasattr(self.env, 'seed'):
-            self.env.seed(seed)
-        if hasattr(self.env.action_space, 'seed'):
-            self.env.action_space.seed(seed)
-        if hasattr(self.env.observation_space, 'seed'):
-            self.env.observation_space.seed(seed)
 
     def _log_summary(self):
         # Calculate logging values. I use a few python shortcuts to calculate each value
@@ -443,16 +435,16 @@ if __name__ == "__main__":
 '''
 
 if __name__ == "__main__":
-    env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    env = gym.make('Acrobot-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
     model = PPO(env)
     
-    for noise in [0.05, 0.1]:
-        for ucb in [0.05, 0.1]:
-            for entropy in [0.005, 0.01]:
+    for noise in [0]:
+        for ucb in [0]:
+            for entropy in [0]:
                 for clip in [0.2]:
-                    for beta in [0, 0.2, 0.5, 1]:
+                    for beta in [1]:
                         for coloured_noise in [True]:
-                            for use_gae in [True, False]:
+                            for use_gae in [False]:
                                 print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}, Beta_coloured_noise: {beta}, Coloured noise or not : {coloured_noise}, use_gae: {use_gae}")
                                 model._init_hyperparameters(noise, ucb, entropy, clip, render=False, lr=0.00025, beta=beta, coloured_noise=coloured_noise, use_gae=use_gae) # use lr = 0.00025 or 0.0005
                                 model.learn(200000)
