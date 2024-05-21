@@ -78,7 +78,10 @@ class PPO:
                 batch_obs, batch_acts, batch_log_probs, batch_rewtogo, batch_lens = self.rollout()
             else:
                 batch_obs, batch_acts, batch_log_probs, batch_rews, batch_lens, batch_vals, batch_dones = self.rollout()
+                _,_,_,ucb = self.evaluate(batch_obs, batch_acts)
                 Adv_k = self.compute_gae(batch_rews, batch_vals, batch_dones)
+                # print(f"UCB : {ucb}")
+                # print(f"Adv_k : {Adv_k}")
                 V = self.critic(batch_obs).squeeze()
                 batch_rewtogo = Adv_k + V.detach() # VOIR OU IL FAIT CA DEMAINLA SUITE
             
@@ -89,12 +92,14 @@ class PPO:
             self.logger['actual_iteration'] = actual_iteration
 
             if not self.use_gae:
-                V, _, _ = self.evaluate(batch_obs, batch_acts)
+                V, _, _, ucb = self.evaluate(batch_obs, batch_acts)
                 Adv_k = batch_rewtogo - V.detach()
                 Adv_k = (Adv_k - Adv_k.mean()) / (Adv_k.std() + 1e-10)
+                # self.print_full_tensor(ucb, "UCB :")
+                # self.print_full_tensor(Adv_k, "Advantage :")
 
             for _ in range(self.nb_epochs_by_iteration):
-                V, current_log_probs, entropy = self.evaluate(batch_obs, batch_acts)
+                V, current_log_probs, entropy, _ = self.evaluate(batch_obs, batch_acts)
                 ratios = torch.exp(current_log_probs - batch_log_probs)  # TO CHECK
                 surrogate_loss1 = ratios * Adv_k
                 surrogate_loss2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * Adv_k
@@ -106,12 +111,12 @@ class PPO:
 
                 self.actor_optim.zero_grad()
                 actor_loss.backward(retain_graph=True)
-                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm) # testing
+                nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
                 self.actor_optim.step()
 
                 self.critic_optim.zero_grad()
                 critic_loss.backward()
-                nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm) # testing
+                nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                 self.critic_optim.step()
 
                 self.logger['actor_losses'].append(actor_loss.detach())
@@ -180,12 +185,7 @@ class PPO:
                 obs_key = tuple(int(np.round(o, decimals=2)*100) for o in obs)
                 self.state_visit_count[obs_key] += 1
                 
-                torch.set_printoptions(profile="full")
-                #print(self.state_visit_count)
-                torch.set_printoptions(profile="default") # reset
-
-                #obs_key = hash(tuple(obs))
-                # self.state_visit_count[obs_key] += 1
+                # self.print_full_tensor(self.state_visit_count, "State visit count :")
 
                 if done:
                     break
@@ -323,16 +323,10 @@ class PPO:
 
     def evaluate(self, batch_obs, batch_acts):
         V = self.critic(batch_obs).squeeze()
-        mean = self.actor(batch_obs)
-        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(obs.numpy())] for obs in batch_obs])
+        mean = self.actor(batch_obs)        
+        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs)] for obs in batch_obs])
         ucb_bonus = self.ucb_bonus_coef / torch.sqrt(state_visit_count_tensor + 1)
         
-        # torch.set_printoptions(profile="full")
-        # print('----------------')
-        # print(f"UCB bonus : {V}, {ucb_bonus[0]}")
-        # print('----------------')
-        # torch.set_printoptions(profile="default") # reset
-
         if self.continuous:
             distrib = MultivariateNormal(mean, self.cov_mat)
 
@@ -343,9 +337,9 @@ class PPO:
         log_probs = distrib.log_prob(batch_acts)
         entropy = distrib.entropy() #.mean() je crois faut enlever le mean() là parce qu'on le fait dans le learn (matteo l'a mis je l'enlève)
         
-        print(f"Entropy : {entropy*self.entropy_coef}")
+        # print(f"Entropy : {entropy*self.entropy_coef}")
 
-        return V + ucb_bonus[0], log_probs, entropy
+        return V, log_probs, entropy, ucb_bonus
     
     def set_seed(self, seed):
         np.random.seed(seed)
@@ -426,7 +420,13 @@ class PPO:
         location = './plots_pendulum/' + name
         plt.savefig(location)
         
-    def _init_hyperparameters(self, noise = 0.1, ucb = 0.1, entropy=0.01, clip=0.2, render=False, lr = 0.005, timesteps_per_batch = 4600, max_timesteps_per_episode=2000, beta = 0, coloured_noise=True, use_gae=True):
+    def print_full_tensor(self, x, name):
+        print(name)
+        torch.set_printoptions(profile="full")
+        print(x)
+        torch.set_printoptions(profile="default") #reset
+        
+    def _init_hyperparameters(self, noise = 0.1, ucb = 0.1, entropy=0.01, clip=0.2, render=False, lr = 0.005, timesteps_per_batch = 4600, max_timesteps_per_episode=2000, beta = 0, coloured_noise=True, use_gae=True, critic = 0.5):
         # Can be modified for training
         self.timesteps_per_batch = timesteps_per_batch
         self.max_timesteps_per_episode = max_timesteps_per_episode
@@ -435,12 +435,13 @@ class PPO:
         self.exploration_noise = noise
         self.ucb_bonus_coef = ucb
         self.entropy_coef = entropy
+        self.critic_weight = critic
 
         self.gamma = 0.99
-        self.nb_epochs_by_iteration = 3
+        self.nb_epochs_by_iteration = 1 # number of seeds to test on
         self.save_frequency = 100
         self.render = render
-        self.render_every_i = 108
+        self.render_every_i = 30
         
         self.beta = beta
         self.coloured_noise = coloured_noise
@@ -480,13 +481,16 @@ if __name__ == "__main__":
     #                             model.learn(200000)
     
 noise = 1e-11
-ucb = 10
+ucb = 1
 entropy = 0.01
 clip = 0.2
-beta = 0.5
+beta = 1
 coloured_noise = True
-use_gae = True
+use_gae = False
+critic = 1e-5
+
+render = True
     
 print(f"Exploration noise: {noise}, UCB bonus coef: {ucb}, Entropy coef: {entropy}, Clip: {clip}, Beta_coloured_noise: {beta}, Coloured noise or not : {coloured_noise}, use_gae: {use_gae}")
-model._init_hyperparameters(noise, ucb, entropy, clip, render=False, lr=0.00025, beta=beta, coloured_noise=coloured_noise, use_gae=use_gae) # use lr = 0.00025 or 0.0005
+model._init_hyperparameters(noise, ucb, entropy, clip, render=False, lr=0.00025, beta=beta, coloured_noise=coloured_noise, use_gae=use_gae, critic = critic) # use lr = 0.00025 or 0.0005
 model.learn(200000)
