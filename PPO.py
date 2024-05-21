@@ -104,6 +104,8 @@ class PPO:
                 surrogate_loss1 = ratios * Adv_k
                 surrogate_loss2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * Adv_k
                 
+                print(surrogate_loss1, surrogate_loss2)
+                
                 #critic_loss = nn.MSELoss()(V, batch_rewtogo)
                 critic_loss = F.mse_loss(V, batch_rewtogo) # to test if diff
                 actor_loss = -(torch.min(surrogate_loss1, surrogate_loss2) + self.entropy_coef * entropy).mean() # METHOD 1 ? MATTEO
@@ -118,6 +120,8 @@ class PPO:
                 critic_loss.backward()
                 nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
                 self.critic_optim.step()
+                
+                print(actor_loss)
 
                 self.logger['actor_losses'].append(actor_loss.detach())
 
@@ -323,11 +327,12 @@ class PPO:
 
     def evaluate(self, batch_obs, batch_acts):
         V = self.critic(batch_obs).squeeze()
-        mean = self.actor(batch_obs)        
+        mean = self.actor(batch_obs)
         state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs)] for obs in batch_obs])
         ucb_bonus = self.ucb_bonus_coef / torch.sqrt(state_visit_count_tensor + 1)
         
         if self.continuous:
+            # self.print_full_tensor(mean[0], "Mean :")
             distrib = MultivariateNormal(mean, self.cov_mat)
 
         else:
@@ -335,9 +340,9 @@ class PPO:
             distrib = Categorical(action_probs)
 
         log_probs = distrib.log_prob(batch_acts)
-        entropy = distrib.entropy() #.mean() je crois faut enlever le mean() là parce qu'on le fait dans le learn (matteo l'a mis je l'enlève)
+        entropy = distrib.entropy() # je crois faut enlever le mean() là parce qu'on le fait dans le learn (matteo l'a mis je l'enlève)
         
-        # print(f"Entropy : {entropy*self.entropy_coef}")
+        print("Entropy :", entropy)
 
         return V, log_probs, entropy, ucb_bonus
     
@@ -465,8 +470,8 @@ if __name__ == "__main__":
 '''
 
 if __name__ == "__main__":
-    # env = gym.make('CartPole-v0') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
-    env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    # env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
     model = PPO(env)
     
     # for noise in [1e-11, 2e-11]:
@@ -480,14 +485,15 @@ if __name__ == "__main__":
     #                             model._init_hyperparameters(noise, ucb, entropy, clip, render=False, lr=0.00025, beta=beta, coloured_noise=coloured_noise, use_gae=use_gae) # use lr = 0.00025 or 0.0005
     #                             model.learn(200000)
     
-noise = 1e-11
-ucb = 1
-entropy = 0.01
+noise = 0 #1e-11
+ucb = 0 #1
+entropy = 0 #0.01
 clip = 0.2
 beta = 1
 coloured_noise = True
 use_gae = False
 critic = 1e-5
+lr = 0.00005
 
 render = True
     
