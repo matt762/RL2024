@@ -269,8 +269,9 @@ class PPO:
 
             # White noise addition. If self.noise_coef, as if no noise
             if not self.coloured_noise:
-                noise = np.random.normal(0, self.noise_coef)
+                noise = np.random.normal(0, self.noise_coef * self.env.action_space.high)
                 action = np.clip(action + noise, self.env.action_space.low, self.env.action_space.high)
+
             # Coloured noise addition
             else:
                 noise = self._generate_colored_noise(size=action.detach().numpy().shape)
@@ -292,13 +293,14 @@ class PPO:
             return action, log_prob.detach()
         
     def _generate_colored_noise(self, size):
-        white_noise = np.random.normal(0, 1, size=size)
+        white_noise = np.random.normal(0, self.noise_coef * self.env.action_space.high, size=size)
         frequency = np.fft.fftfreq(size[-1])
         amplitude = 1 / (np.abs(frequency) ** self.beta/2 + 1e-10)  # To avoid division by zero # use beta/2 is crucial for generating the correct type of 1/f^β noise. This scaling ensures that the noise has the desired power spectral density (PSD) characteristics
         noise_fft = np.fft.fft(white_noise)
         colored_noise_fft = noise_fft * amplitude
         colored_noise = np.fft.ifft(colored_noise_fft).real
-        colored_noise *= 1e-11
+        colored_noise *= 8e-11
+        print("color", colored_noise)
         return colored_noise
         
     def evaluate(self, batch_obs, batch_acts):
@@ -429,7 +431,6 @@ class PPO:
     def _init_hyperparameters(self, timesteps_per_batch = 4800, max_timesteps_per_episode = 1600, clip = 0.2,  ent_coef = 0.01, anneal_lr = False, noise_coef = 0.1, coloured_noise = False, beta = 0.5, use_gae=False, gamma = 0.95, lambda_gae = 0.95, ucb_coef = 0, num_minibatches = 4, render = False):
         self.timesteps_per_batch = timesteps_per_batch
         self.max_timesteps_per_episode = max_timesteps_per_episode
-        self.render_every_i = 20
 
         # Incorporate entropy, if coef = 0, as if no entropy incroporated. 0.01 is advised
         self.entropy_coef = ent_coef # A high coefficient penalized over deterministic policis --> more exploration. Useful for more complex environment
@@ -449,21 +450,27 @@ class PPO:
         self.beta = beta # 0.5 is advised
         self.coloured_noise = coloured_noise
         self.noise_coef = noise_coef
+        # in the case of white noise discrete env : probability noise_coef to pick a full random action
+        # in the case of white noise continuous env : sample from a gaussian with mean 0 and std dev being noise_coef % of the half possible action interval
+        # for example if action space between -1 and 1, noise_coef = 0.1, then std dev of the gaussian is 0.1 (10 % of half interval)
+        #             if action space between -2 and 2, noise_coef = 0.1, then std dev of the gaussian is 0.2 (10 % of half interval)
+        # in the case of coloured noise continuous env : 
+
         
         # Use the generalized advantage estimation
         self.use_gae = use_gae
         self.gamma = gamma
         self.lambda_gae = lambda_gae
         
-        #UCB bonus coefficient
+        # UCB bonus coefficient
         self.ucb_coef = ucb_coef
         
         # Number of minibatches
         self.num_minibatches = num_minibatches
         
-        # render
+        # Use render
         self.render = render
-        
+        self.render_every_i = 20
         
     
         '''
@@ -503,13 +510,15 @@ def plot_rewards(rewards, moving_avg_width = 1):
     plt.show()
 
 if __name__ == "__main__":
-    for seed in [42]: #[42,380,479]
-        env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    for seed in [42, 380, 479]: # constant seed
+        env = gym.make('MountainCarContinuous-v0') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env)
         model = PPO(env)
-        model._init_hyperparameters(coloured_noise=False, beta=0.5, use_gae=False, ucb_coef=0, ent_coef=0, anneal_lr=True, render=False)
+        model._init_hyperparameters(noise_coef = 0.1, coloured_noise=True, beta=0.5, use_gae=False, ucb_coef=0, ent_coef=0, anneal_lr=True, render=False)
         rew = model.learn(5000)
         plot_rewards(rew)
+
+
 
 '''
 Possible tests :
