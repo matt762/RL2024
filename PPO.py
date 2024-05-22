@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 from collections import defaultdict
 import numpy as np
 import os
-import tqdm
 import time
 import gym
 import random
@@ -55,10 +54,10 @@ class FeedForwardNN2(nn.Module):
 
 class PPO:
     def __init__(self, env : Env):
+        self.env = env
         self._init_hyperparameters()
 
         # Extract env informations
-        self.env = env
         self.continuous = isinstance(env.action_space, gym.spaces.Box)
         self.obs_dim = env.observation_space.shape[0]
         self.act_dim = env.action_space.shape[0] if self.continuous else env.action_space.n
@@ -92,15 +91,12 @@ class PPO:
         self.episode_rewards = []
         self.state_visit_count = defaultdict(int)
 
-    def learn(self, total_timesteps):
+    def learn(self, total_timesteps, seed):
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, {self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
         actual_time_step = 0 # time_step simulated so far
         actual_iteration = 0 # iteration so far
         
-        if self.deterministic_seed:
-            actual_seed = self.seed_list[actual_iteration % len(self.seed_list)]
-            print("Seed: ", actual_seed)
-            self.set_seed(actual_seed)
+        self.env.seed(seed)
 
         while actual_time_step < total_timesteps:
             
@@ -181,8 +177,8 @@ class PPO:
             
             # Information at each iteration 
             self._log_summary()
-
-        self._update_plots()
+            
+        return self.episode_rewards
 
     def rollout(self):
         batch_obs = []
@@ -430,22 +426,11 @@ class PPO:
             name = 'd' + '_clip' + str(self.clip) + '_ent' + str(self.entropy_coef) + str(self.entropy_coef) + '_gae' + str(self.use_gae) + '_gamma' + str(self.gamma) + '_lambda' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + '_minibatches' + str(self.num_minibatches) + '_annlr' + str(self.anneal_lr) + 'n_coef' + str(self.noise_coef) + '.png'
         location = './plots_pendulum/' + name
         plt.savefig(location)
-        
-    def set_seed(self, seed):
-        self.env.seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
-        self.env.action_space.seed(seed)
-        self.env.observation_space.seed(seed)
-        os.environ['PYTHONHASHSEED'] = str(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.backends.cudnn.deterministic = True
 
-
-    def _init_hyperparameters(self, timesteps_per_batch = 4800, max_timesteps_per_episode = 1600, clip = 0.2,  ent_coef = 0.01, anneal_lr = False, noise_coef = 0.1, coloured_noise = False, beta = 0.5, use_gae=False, gamma = 0.95, lambda_gae = 0.95, ucb_coef = 0, num_minibatches = 4):
+    def _init_hyperparameters(self, timesteps_per_batch = 4800, max_timesteps_per_episode = 1600, clip = 0.2,  ent_coef = 0.01, anneal_lr = False, noise_coef = 0.1, coloured_noise = False, beta = 0.5, use_gae=False, gamma = 0.95, lambda_gae = 0.95, ucb_coef = 0, num_minibatches = 4, render = False):
         self.timesteps_per_batch = timesteps_per_batch
         self.max_timesteps_per_episode = max_timesteps_per_episode
+        self.render_every_i = 20
 
         # Incorporate entropy, if coef = 0, as if no entropy incroporated. 0.01 is advised
         self.entropy_coef = ent_coef # A high coefficient penalized over deterministic policis --> more exploration. Useful for more complex environment
@@ -458,7 +443,7 @@ class PPO:
 
         # Probably won't change
         self.nb_epochs_per_iteration = 3 # try to change it
-        self.lr = 0.005 # try to change it
+        self.lr = 0.005 # try to change it 3e-4 for the pendulum, 5e-3 for mountaincarcontinuous
         self.max_grad_norm = 0.5 # try to change it # add of cliping gradient for preventing exploding gradient --> more stable learning
 
         # Possibility to incorporate White and Coloured noise exploration
@@ -478,11 +463,10 @@ class PPO:
         self.num_minibatches = num_minibatches
         
         # render
-        self.render = False
+        self.render = render
         
-        # For deterministic seed for reproductibility
-        self.deterministic_seed = True
-        self.seed_list = [42]
+        
+    
         '''
         # Seed management
         self.seed = 42 # to set seed for reproductibility
@@ -492,11 +476,24 @@ class PPO:
             torch.manual_seed(self.seed)
             print(f"Successfully set seed to {self.seed}")'''
 
+
+def set_seed(env):
+    np.random.seed(seed)
+    random.seed(seed)
+    env.action_space.seed(seed)
+    env.observation_space.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+
 if __name__ == "__main__":
-    env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
-    model = PPO(env)
-    model._init_hyperparameters(coloured_noise=True, beta=0.5, use_gae=True, ucb_coef=0.1, ent_coef=0, anneal_lr=True)
-    model.learn(10000)
+    for seed in [42,380,479]:
+        env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+        set_seed(env)
+        model = PPO(env)
+        model._init_hyperparameters(coloured_noise=False, beta=0.5, use_gae=False, ucb_coef=0, ent_coef=0, anneal_lr=True, render=False)
+        rew = model.learn(500000, seed)
 
 '''
 Possible tests :
