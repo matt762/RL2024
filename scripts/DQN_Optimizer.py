@@ -5,6 +5,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from itertools import count
 import numpy as np
+import os
+
 
 import torch
 import torch.nn as nn
@@ -26,14 +28,20 @@ class DQN_Optimizer(object):
     # Implementation of Deep Q learning based on https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html tutorial
     # with some adaptations to fit better the original algorithm from the paper 
     # "Playing Atari with Deep Reinforcement Learning, Mnih et al." https://arxiv.org/abs/1312.5602
-    def __init__(self, env, replay_memory_size = 10000, param_dict = None):
+    def __init__(self, env, seed, replay_memory_size = 10000, param_dict = None):
         # Initialize gymnasium environment
         self.env = env
+
+        # Define seeds
+        state, _ = env.reset(seed=seed)
+        self.set_seed(seed=seed)
+
         n_actions = env.action_space.n
-        state, _ = env.reset()
         n_observations = len(state)
 
-        # Initialize the DQnetwork 
+
+
+        # Initialize the double DQnetwork 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("pytorch will run on {}".format(self.device))
         self.policy_network = DQN(n_observations, n_actions).to(self.device)
@@ -65,7 +73,15 @@ class DQN_Optimizer(object):
         self.epsilon = param_dict.get("eps_start")
             
         
-
+    def set_seed(self, seed):
+        np.random.seed(seed)
+        random.seed(seed)
+        self.env.observation_space.seed(seed)
+        self.env.action_space.seed(seed)
+        os.environ['PYTHONHASHSEED'] = str(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
 
     def set_optimizer(self, optimizer: str = "adam"):
         if(optimizer == "adam"):
