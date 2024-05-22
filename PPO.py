@@ -11,7 +11,8 @@ import os
 import time
 import gym
 import random
-import seaborn
+import seaborn as sns
+import pandas as pd
 
 class FeedForwardNN(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -494,29 +495,52 @@ def set_seed(env):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
-def plot_rewards(rewards, moving_avg_width = 1):
-    plt.figure()
-    plt.title("Cumulative reward over episodes") 
-    plt.xlabel("Episode") 
-    plt.ylabel("Collected reward")
-    plt.plot(rewards)
+def plot_rewards(seed_rewards, individual = False):
 
-    if moving_avg_width > 1:
-        # https://stackoverflow.com/questions/11352047/finding-moving-average-from-data-points-in-python
-        cum_reward = np.cumsum(rewards)
-        moving_average = (cum_reward[moving_avg_width:] - cum_reward[:-moving_avg_width]) / moving_avg_width
-        plt.plot(moving_average)
+    test_rewards = []
+    test_episodes = []
+    seeds = []
 
+    for seed, rewards in enumerate(seed_rewards):
+        for episode_idx, reward in enumerate(rewards):
+            test_rewards.append(reward)
+            test_episodes.append(episode_idx*10)
+            seeds.append(seed)
+
+    df = pd.DataFrame({
+        'Episode': test_episodes,
+        'Test_rewards': test_rewards,
+        'Seed': seeds
+    })
+    df.to_csv("rewards_2kepisodes.csv")
+    
+    # Plot the data
+    plt.figure(figsize=(10, 6))
+    if individual:
+        sns.lineplot(data=df, x='Episode', y='Rewards', hue = "Seed", legend="full")
+    else:
+        sns.lineplot(data=df, x='Episode', y='Rewards')
+        
+    plt.title('Test rewards over episodes')
+    plt.xlabel('Episode')
+    plt.ylabel('Test_rewards')
     plt.show()
 
 if __name__ == "__main__":
-    for seed in [42, 380, 479]: # constant seed
-        env = gym.make('MountainCarContinuous-v0') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    
+    seed_rewards = []
+    
+    for seed in [42, 380, 479]: #[42,380,479]
+        
+        print('Seed:', seed)
+        
+        env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env)
         model = PPO(env)
-        model._init_hyperparameters(noise_coef = 0.1, coloured_noise=True, beta=0.5, use_gae=False, ucb_coef=0, ent_coef=0, anneal_lr=True, render=False)
-        rew = model.learn(5000)
-        plot_rewards(rew)
+        model._init_hyperparameters(timesteps_per_batch = 4800, max_timesteps_per_episode = 1600, clip = 0.2,  ent_coef = 0.01, anneal_lr = False, noise_coef = 0.1, coloured_noise = False, beta = 0.5, use_gae=False, gamma = 0.95, lambda_gae = 0.95, ucb_coef = 0, num_minibatches = 4, render = False)
+        seed_rewards.append(model.learn(100000))
+        
+    plot_rewards(seed_rewards, individual=False)
 
 
 
