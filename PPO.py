@@ -487,13 +487,29 @@ def set_seed(env):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
+def plot_rewards(rewards, moving_avg_width = 1):
+    plt.figure()
+    plt.title("Cumulative reward over episodes") 
+    plt.xlabel("Episode") 
+    plt.ylabel("Collected reward")
+    plt.plot(rewards)
+
+    if moving_avg_width > 1:
+        # https://stackoverflow.com/questions/11352047/finding-moving-average-from-data-points-in-python
+        cum_reward = np.cumsum(rewards)
+        moving_average = (cum_reward[moving_avg_width:] - cum_reward[:-moving_avg_width]) / moving_avg_width
+        plt.plot(moving_average)
+
+    plt.show()
+
 if __name__ == "__main__":
-    for seed in [42,42,42]: #[42,380,479]
+    for seed in [42]: #[42,380,479]
         env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env)
         model = PPO(env)
         model._init_hyperparameters(coloured_noise=False, beta=0.5, use_gae=False, ucb_coef=0, ent_coef=0, anneal_lr=True, render=False)
-        rew = model.learn(5000, seed)
+        rew = model.learn(5000)
+        plot_rewards(rew)
 
 '''
 Possible tests :
