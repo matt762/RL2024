@@ -11,6 +11,7 @@ import os
 import time
 import gym
 import random
+import seaborn
 
 class FeedForwardNN(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -91,12 +92,10 @@ class PPO:
         self.episode_rewards = []
         self.state_visit_count = defaultdict(int)
 
-    def learn(self, total_timesteps, seed):
+    def learn(self, total_timesteps):
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, {self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
         actual_time_step = 0 # time_step simulated so far
         actual_iteration = 0 # iteration so far
-        
-        self.env.seed(seed)
 
         while actual_time_step < total_timesteps:
             
@@ -478,6 +477,7 @@ class PPO:
 
 
 def set_seed(env):
+    env.seed(seed)
     np.random.seed(seed)
     random.seed(seed)
     env.action_space.seed(seed)
@@ -488,12 +488,12 @@ def set_seed(env):
     torch.backends.cudnn.deterministic = True
 
 if __name__ == "__main__":
-    for seed in [42,380,479]:
-        env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+    for seed in [42,42,42]: #[42,380,479]
+        env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env)
         model = PPO(env)
         model._init_hyperparameters(coloured_noise=False, beta=0.5, use_gae=False, ucb_coef=0, ent_coef=0, anneal_lr=True, render=False)
-        rew = model.learn(500000, seed)
+        rew = model.learn(5000, seed)
 
 '''
 Possible tests :
