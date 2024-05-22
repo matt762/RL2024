@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 from .DQN import DQN
 from .ReplayMemory import ReplayMemory, Transition
@@ -28,7 +28,7 @@ class DQN_Optimizer(object):
     # Implementation of Deep Q learning based on https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html tutorial
     # with some adaptations to fit better the original algorithm from the paper 
     # "Playing Atari with Deep Reinforcement Learning, Mnih et al." https://arxiv.org/abs/1312.5602
-    def __init__(self, env, seed, replay_memory_size = 10000, param_dict = None):
+    def __init__(self, env, seed, param_dict = None):
         # Initialize gymnasium environment
         self.env = env
 
@@ -57,15 +57,18 @@ class DQN_Optimizer(object):
                 "learning_rate" : 1e-3,
                 "train_episodes" : 200,
                 "test_episodes" : 20,
+                "replay_memory_size" : 100000,
+                "optimizer" : "adam",
+                "fill_rp_memory" : True,
                 }
         else:
             self.param_dict = param_dict
-        self.memory = ReplayMemory(replay_memory_size)
+        self.memory = ReplayMemory(self.param_dict.get("replay_memory_size"))
         self.steps_done = 0
         self.episode_durations = []
         self.epsilons = []
         self.epsilon = param_dict.get("eps_start")
-
+        self.set_optimizer(self.param_dict.get("optimizer"))
         if ( not torch.cuda.is_available() and param_dict.get("train_episodes") > 50):
             print("The specified number of episodes might be big for optimization on cpu")
         self.episode_cumulative_reward = []
@@ -94,8 +97,8 @@ class DQN_Optimizer(object):
             print("invalid optimizer, please use : ...")
 
 
-    def run_optimization(self, fill_rp_memory = True):
-        if fill_rp_memory:
+    def run_optimization(self):
+        if self.param_dict.get("fill_rp_memory"):
             print("Filling buffer memory...")
             self.fill_buffer_memory()
             print("Buffer memory filled, size: {}".format(len(self.memory)))
