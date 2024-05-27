@@ -235,8 +235,12 @@ class PPO:
                 batch_acts.append(action)
                 batch_log_probs.append(log_prob)
                 
-                obs_key = tuple(int(np.round(o, decimals=2)*100) for o in obs)
-                self.state_visit_count[obs_key] += 1
+                if self.continuous:
+                    obs_key = tuple(int(np.round(o, decimals=2)*100) for o in obs) + (np.round(action[0], decimals=2),)
+                    self.state_visit_count[obs_key] += 1
+                else:
+                    obs_key = tuple(int(np.round(o, decimals=2)*100) for o in obs) + (action,)
+                    self.state_visit_count[obs_key] += 1
                 
                 if done:
                     break
@@ -303,11 +307,12 @@ class PPO:
         white_noise = np.random.normal(0, self.noise_coef * self.env.action_space.high, size=size)
         frequency = np.fft.fftfreq(size[-1])
         amplitude = 1 / (np.abs(frequency) ** self.beta/2 + 1e-10)  # To avoid division by zero # use beta/2 is crucial for generating the correct type of 1/f^β noise. This scaling ensures that the noise has the desired power spectral density (PSD) characteristics
+        amplitude[0] = 0
         noise_fft = np.fft.fft(white_noise)
         colored_noise_fft = noise_fft * amplitude
         colored_noise = np.fft.ifft(colored_noise_fft).real
         colored_noise *= 8e-11
-        print("color", colored_noise)
+        # print("color", colored_noise)
         return colored_noise
         
     def evaluate(self, batch_obs, batch_acts):
@@ -318,7 +323,7 @@ class PPO:
         mean = self.actor(batch_obs)
         
         #  Compute the UCB bonus
-        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs)] for obs in batch_obs])
+        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (int(a),)] for obs, a in zip(batch_obs, batch_acts)])
         ucb_bonus = self.ucb_coef / torch.sqrt(state_visit_count_tensor + 1)
 
         if self.continuous:
@@ -477,7 +482,7 @@ class PPO:
             'Rewards': all_rewards,
             'Seed': all_seeds
         })
-        df.to_csv("rewards_2kepisodes.csv")
+        df.to_csv("PPO_Pendulum.csv")
         
         # Plot the data
         plt.figure(figsize=(10, 6))
@@ -491,7 +496,7 @@ class PPO:
         plt.ylabel('Rewards')
         plt.tight_layout()
         name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './plots_cartpole/' + name
+        location = './plots/' + name
         plt.savefig(location)
         
     def plot_rewards_episodes(self, seed_rewards, individual = False):
@@ -503,7 +508,7 @@ class PPO:
         for seed, rewards in enumerate(seed_rewards):
             for episode_idx, reward in enumerate(rewards):
                 test_rewards.append(reward)
-                test_episodes.append(episode_idx*10)
+                test_episodes.append(episode_idx)
                 seeds.append(seed)
 
         df = pd.DataFrame({
@@ -511,7 +516,7 @@ class PPO:
             'Test_rewards': test_rewards,
             'Seed': seeds
         })
-        df.to_csv("rewards_2kepisodes.csv")
+        df.to_csv("PPO_CartPole.csv")
         
         # Plot the data
         plt.figure(figsize=(10, 6))
@@ -525,7 +530,7 @@ class PPO:
         plt.ylabel('Rewards')
         plt.tight_layout()
         name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './plots_acrobot/' + name
+        location = './plots/' + name
         plt.savefig(location)
         print('Plot saved at:', location)
 
@@ -543,20 +548,21 @@ def set_seed(env, seed):
 
 if __name__ == "__main__":
     
-    for param in [50]:
-        seed_rewards = []
-        seed_time_steps = []
-        for seed in [42, 380, 479]: #[42,380,479]
-            print('Seed:', seed, 'param:', param)
-            
-            env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
-            set_seed(env, seed)
-            model = PPO(env)
-            model._init_hyperparameters(timesteps_per_batch=param, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.0,lr=0.0025, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.0, num_minibatches=4, render=False)
-            model.learn(50000)
-            
-            seed_rewards.append(model.episode_rewards)
-            
-            # seed_rewards.append(model.episode_rewards)
-            # seed_time_steps.append(model.time_step_episode)
-        model.plot_rewards_episodes(seed_rewards, individual = False)
+    seed_rewards = []
+    seed_time_steps = []
+    for seed in [42, 380, 479]: #[42,380,479]
+        print('Seed:', seed)
+        
+        env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+        set_seed(env, seed)
+        model = PPO(env)
+        model._init_hyperparameters(timesteps_per_batch=1000, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.0, lr=0.005, anneal_lr=True, noise_coef=0, coloured_noise=False, beta=0, use_gae=True, gamma=0.95, lambda_gae=0.98, ucb_coef=0.01, num_minibatches=4, render=False)
+        # model._init_hyperparameters(timesteps_per_batch=50, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01,lr=0.005, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
+        model.learn(150000)
+        
+        seed_rewards.append(model.episode_rewards)
+        
+        # seed_time_steps.append(model.time_step_episode)
+        
+    model.plot_rewards_episodes(seed_rewards, individual = False)
+    # model.plot_rewards_time_steps(seed_rewards, seed_time_steps, individual = False)
