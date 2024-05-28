@@ -29,6 +29,7 @@ class FeedForwardNN(nn.Module):
         activation1 = F.relu(self.layer1(obs))
         activation2 = F.relu(self.layer2(activation1))
         output = self.layer3(activation2)
+        self.actual_time_step = 0
 
         return output
     
@@ -73,8 +74,6 @@ class PPO:
 
         self.actor_optim = Adam(self.actor.parameters(), lr=self.lr)
         self.critic_optim = Adam(self.critic.parameters(), lr=self.lr)
-        
-        self.actual_time_step = 0
 
         # Create cov matrix for multivariate distribution and stochastic action (close to mean of actions) if continuous action space
         if self.continuous:
@@ -93,8 +92,7 @@ class PPO:
         }
 
         self.episode_rewards = []
-        self.time_step_episode = []
-        
+        self.episode_timesteps = []
         self.state_visit_count = defaultdict(int)
 
     def learn(self, total_timesteps):
@@ -115,7 +113,7 @@ class PPO:
                 V = self.critic(batch_obs).squeeze()
                 batch_rewtogo = Adv_k + V.detach()
 
-            # actual_time_step += np.sum(batch_lens)
+            #self.actual_time_step += np.sum(batch_lens)
             actual_iteration += 1
             
             # Normalize the advantage (to stabilize learning)
@@ -182,6 +180,8 @@ class PPO:
             # Information at each iteration 
             self._log_summary()
             
+        return self.episode_rewards, self.episode_timesteps
+
     def rollout(self):
         batch_obs = []
         batch_acts = []
@@ -198,7 +198,7 @@ class PPO:
 
         time_step_batch = 0
         ep_rews = []
-        
+
         while time_step_batch < self.timesteps_per_batch:
             if self.use_gae:
                 ep_vals = []
@@ -209,9 +209,7 @@ class PPO:
             done = False
 
             for timesteps_episode in range(self.max_timesteps_per_episode):
-                
                 self.actual_time_step += 1
-                
                 if self.render and (self.logger['actual_iteration'] % self.render_every_i == 0) and len(batch_lens) == 0:
                     self.env.render(mode='human')
 
@@ -249,7 +247,7 @@ class PPO:
 
 
             self.episode_rewards.append(np.sum(ep_rews))
-            self.time_step_episode.append(self.actual_time_step)
+            self.episode_timesteps.append(self.actual_time_step)
             
         batch_obs = torch.tensor(batch_obs, dtype=torch.float)
         batch_acts = torch.tensor(batch_acts, dtype=torch.float) if self.continuous else torch.tensor(batch_acts, dtype=torch.long)
@@ -301,13 +299,12 @@ class PPO:
         
     def _generate_colored_noise(self, size):
         white_noise = np.random.normal(0, self.noise_coef * self.env.action_space.high, size=size)
-        frequency = np.fft.fftfreq(size[-1])
-        amplitude = 1 / (np.abs(frequency) ** self.beta/2 + 1e-10)  # To avoid division by zero # use beta/2 is crucial for generating the correct type of 1/f^β noise. This scaling ensures that the noise has the desired power spectral density (PSD) characteristics
-        noise_fft = np.fft.fft(white_noise)
+        frequency = np.fft.rfftfreq(size[-1])
+        amplitude = 1 / (np.abs(frequency) ** (self.beta / 2) + 1e-10)  # To avoid division by zero # use beta/2 is crucial for generating the correct type of 1/f^β noise. This scaling ensures that the noise has the desired power spectral density (PSD) characteristics
+        noise_fft = np.fft.rfft(white_noise)
         colored_noise_fft = noise_fft * amplitude
-        colored_noise = np.fft.ifft(colored_noise_fft).real
-        colored_noise *= 8e-11
-        print("color", colored_noise)
+        colored_noise = np.fft.irfft(colored_noise_fft, n=size[-1]).real
+        colored_noise *= 8e-11 # arbitrary coeff
         return colored_noise
         
     def evaluate(self, batch_obs, batch_acts):
@@ -403,7 +400,39 @@ class PPO:
         self.logger['batch_rews'] = []
         self.logger['actor_losses'] = []
 
-    def _init_hyperparameters(self, timesteps_per_batch = 4800, max_timesteps_per_episode = 1600, clip = 0.2,  ent_coef = 0.01, lr = 0.005 ,anneal_lr = False, noise_coef = 0.1, coloured_noise = False, beta = 0.5, use_gae=False, gamma = 0.95, lambda_gae = 0.95, ucb_coef = 0, num_minibatches = 4, render = False):
+    def _update_plots(self):
+        plt.figure(figsize=(12, 8))
+
+        plt.subplot(2, 1, 1)
+        plt.plot(self.episode_rewards, label='Total Reward per Episode')
+        plt.ylabel('Total Reward')
+        plt.legend()
+        
+        length = 50
+
+        if len(self.episode_rewards) >= length:
+            means = [np.mean(self.episode_rewards[i-length:i]) for i in range(length, len(self.episode_rewards)+1)]
+            stds = [np.std(self.episode_rewards[i-length:i]) for i in range(length, len(self.episode_rewards)+1)]
+            x = range(length, len(self.episode_rewards)+1)
+            plt.subplot(2, 1, 2)
+            plt.plot(x, means, label='Mean Reward')
+            plt.fill_between(x, np.array(means) - np.array(stds), np.array(means) + np.array(stds), alpha=0.2)
+            plt.ylabel('Mean Reward')
+            plt.legend()
+
+        plt.tight_layout()
+        #name = 'n' + str(self.exploration_noise) + '_ucb' + str(self.ucb_bonus_coef) + '_ent' + str(self.entropy_coef) + '_clip' + str(self.clip) + '_beta' + str(self.beta) + '_col' + str(self.coloured_noise) + '_gae' + str(self.use_gae) + '.png'
+        if self.continuous:
+            if self.coloured_noise:
+                name = 'c' + '_clip' + str(self.clip) + '_ent' + str(self.entropy_coef) + '_gae' + str(self.use_gae) + '_gamma' + str(self.gamma) + '_lambda' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + '_minibatches' + str(self.num_minibatches) + '_annlr' + str(self.anneal_lr) + 'col_n' + str(self.coloured_noise) + 'n_coef' + str(self.noise_coef) + 'beta' + str(self.beta) + '.png'
+            else:
+                name = 'c' + '_clip' + str(self.clip) + '_ent' + str(self.entropy_coef) + str(self.entropy_coef) + '_gae' + str(self.use_gae) + '_gamma' + str(self.gamma) + '_lambda' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + '_minibatches' + str(self.num_minibatches) + '_annlr' + str(self.anneal_lr) + 'col_n' + str(self.coloured_noise) + 'n_coef' + str(self.noise_coef) + '.png'
+        else:
+            name = 'd' + '_clip' + str(self.clip) + '_ent' + str(self.entropy_coef) + str(self.entropy_coef) + '_gae' + str(self.use_gae) + '_gamma' + str(self.gamma) + '_lambda' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + '_minibatches' + str(self.num_minibatches) + '_annlr' + str(self.anneal_lr) + 'n_coef' + str(self.noise_coef) + '.png'
+        location = './plots_pendulum/' + name
+        plt.savefig(location)
+
+    def _init_hyperparameters(self, timesteps_per_batch = 4800, max_timesteps_per_episode = 1600, clip = 0.2,  ent_coef = 0.01, lr=0.005, anneal_lr = False, noise_coef = 0.1, coloured_noise = False, beta = 0.5, use_gae=False, gamma = 0.95, lambda_gae = 0.95, ucb_coef = 0, num_minibatches = 4, render = False):
         self.timesteps_per_batch = timesteps_per_batch
         self.max_timesteps_per_episode = max_timesteps_per_episode
 
@@ -419,7 +448,7 @@ class PPO:
         # Probably won't change
         self.nb_epochs_per_iteration = 3 # try to change it
         self.lr = lr # try to change it 3e-4 for the pendulum, 5e-3 for mountaincarcontinuous
-        self.max_grad_norm = 1.0 # try to change it # add of cliping gradient for preventing exploding gradient --> more stable learning
+        self.max_grad_norm = 1 # try to change it # add of cliping gradient for preventing exploding gradient --> more stable learning
 
         # Possibility to incorporate White and Coloured noise exploration
         self.beta = beta # 0.5 is advised
@@ -429,13 +458,13 @@ class PPO:
         # in the case of white noise continuous env : sample from a gaussian with mean 0 and std dev being noise_coef % of the half possible action interval
         # for example if action space between -1 and 1, noise_coef = 0.1, then std dev of the gaussian is 0.1 (10 % of half interval)
         #             if action space between -2 and 2, noise_coef = 0.1, then std dev of the gaussian is 0.2 (10 % of half interval)
-        # in the case of coloured noise continuous env : 
-
-        self.gamma = gamma
+        # in the case of coloured noise continuous env : self.noise_coef % of half possible action space to generate std dev of white noise gaussian
+        # then FFT, beta for 1/f^{beta} and addition of the noise at the end
 
         
         # Use the generalized advantage estimation
         self.use_gae = use_gae
+        self.gamma = gamma
         self.lambda_gae = lambda_gae
         
         # UCB bonus coefficient
@@ -447,69 +476,30 @@ class PPO:
         # Use render
         self.render = render
         self.render_every_i = 20
-        
-    
-        '''
-        # Seed management
-        self.seed = 42 # to set seed for reproductibility
-        if self.seed is not None:
-            assert(type(self.seed) == int)
-            # set seed
-            torch.manual_seed(self.seed)
-            print(f"Successfully set seed to {self.seed}")'''
-        
-    def plot_rewards_time_steps(self,seed_rewards, seed_time_steps, individual = False):
-        
-        # Create empty lists to store the data
-        all_times = []
-        all_rewards = []
-        all_seeds = []
 
-        # Loop over each seed's rewards and time steps
-        for seed, rewards in enumerate(seed_rewards):
-            for episode, reward in enumerate(rewards):
-                all_times.append(seed_time_steps[seed][episode])
-                all_rewards.append(reward)
-                all_seeds.append(seed)
-
-        # Create the DataFrame
-        df = pd.DataFrame({
-            'Time': all_times,
-            'Rewards': all_rewards,
-            'Seed': all_seeds
-        })
-        df.to_csv("rewards_2kepisodes.csv")
-        
-        # Plot the data
-        plt.figure(figsize=(10, 6))
-        if individual:
-            sns.lineplot(data=df, x='Time', y='Rewards', hue = "Seed", legend="full")
-        else:
-            sns.lineplot(data=df, x='Time', y='Rewards')
-            
-        plt.title('Rewards over episodes')
-        plt.xlabel('Time steps')
-        plt.ylabel('Rewards')
-        plt.tight_layout()
-        name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './plots_cartpole/' + name
-        plt.savefig(location)
-        
-    def plot_rewards_episodes(self, seed_rewards, individual = False):
+    def plot_rewards(self, seed_rewards, seed_timesteps, individual = False):
 
         test_rewards = []
         test_episodes = []
         seeds = []
 
         for seed, rewards in enumerate(seed_rewards):
+            for episode_idx in range(len(rewards)):
+                test_rewards.append(rewards[episode_idx])
+                test_episodes.append(seed_timesteps[seed][episode_idx])
+                seeds.append(seed)
+                
+                '''
+        for seed, rewards in enumerate(seed_rewards):
             for episode_idx, reward in enumerate(rewards):
                 test_rewards.append(reward)
-                test_episodes.append(episode_idx)
+                test_episodes.append(episode_idx*10)
                 seeds.append(seed)
+                '''
 
         df = pd.DataFrame({
             'Episode': test_episodes,
-            'Test_rewards': test_rewards,
+            'Rewards': test_rewards,
             'Seed': seeds
         })
         df.to_csv("rewards_2kepisodes.csv")
@@ -517,18 +507,19 @@ class PPO:
         # Plot the data
         plt.figure(figsize=(10, 6))
         if individual:
-            sns.lineplot(data=df, x='Episode', y='Test_rewards', hue = "Seed", legend="full")
+            sns.lineplot(data=df, x='Episode', y='Rewards', hue = "Seed", legend="full")
         else:
-            sns.lineplot(data=df, x='Episode', y='Test_rewards')
+            sns.lineplot(data=df, x='Episode', y='Rewards')
             
         plt.title('Rewards over episodes')
-        plt.xlabel('Episodes')
+        plt.xlabel('Time steps')
         plt.ylabel('Rewards')
         plt.tight_layout()
+        #name = 'n' + str(self.noise_coef) + '_ucb' + str(self.ucb_bonus_coef) + '_ent' + str(self.entropy_coef) + '_clip' + str(self.clip) + '_beta' + str(self.beta) + '_col' + str(self.coloured_noise) + '_gae' + str(self.use_gae) + '.png'
         name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './plots_acrobot/' + name
+        location = './plots_pendulum/' + name
         plt.savefig(location)
-        print('Plot saved at:', location)
+        #plt.show()
 
 
 def set_seed(env, seed):
@@ -544,20 +535,34 @@ def set_seed(env, seed):
 
 if __name__ == "__main__":
     
-    for param in [50]: # try next  under 500. genre 300 et 100 ?
+    for timesteps_per_batch in [500, 1000, 2000, 4000, 6000]:
         seed_rewards = []
-        seed_time_steps = []
+        seed_timesteps = []
         for seed in [42, 380, 479]: #[42,380,479]
-            print('Seed:', seed, 'param:', param)
+            print('Seed:', seed)
             
-            env = gym.make('Acrobot-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+            env = gym.make('MountainCar-v0') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MOuntainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
             set_seed(env, seed)
             model = PPO(env)
-            model._init_hyperparameters(timesteps_per_batch=param, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01, lr=0.005, anneal_lr=True, noise_coef=0.1, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
-            model.learn(50000)
-            
-            seed_rewards.append(model.episode_rewards)
-            
-            # seed_rewards.append(model.episode_rewards)
-            # seed_time_steps.append(model.time_step_episode)
-        model.plot_rewards_episodes(seed_rewards, individual = False)
+            model._init_hyperparameters(timesteps_per_batch=timesteps_per_batch, max_timesteps_per_episode=1000, clip=0.2, ent_coef=0.01, lr=0.0025, anneal_lr=True, noise_coef=0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0, num_minibatches=4, render=False)
+            seed_rew, seed_time = model.learn(30000)
+            seed_rewards.append(seed_rew)
+            print("VALEUR", seed_rew, seed_time)
+            seed_timesteps.append(seed_time)
+
+        model.plot_rewards(seed_rewards, seed_timesteps, individual=False)
+# TO TRY
+# timesteps_per_batch entre 200 et 10000 
+# clip [0, 0.1 0.2 0.5]
+# ent_coef [0, 0.01, 0.05, 0.1]
+# lr [0.01, 0.005, 0.001, 0.0005, 0.0003]
+# anneal_lr [True, False]
+# noise_coef = 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]
+# coloured_noise [True, False]
+# beta if coloured_noise [0, 0.2, 0.5, 1]
+# use_gae [True, False]
+# gamma = [0.95, 0.99]
+# lambda_gae = [ 0.95, 0.99]
+# ucb_coef = [0, ???]
+# num_minibatches = [???]
+# advised are : 5000, 0.2, 0.01, 0.005, 0.05, True, False, 0, True, 0.99/0.95, 0.95, ?, 4ou8?
