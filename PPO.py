@@ -323,7 +323,10 @@ class PPO:
         mean = self.actor(batch_obs)
         
         #  Compute the UCB bonus
-        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (int(a),)] for obs, a in zip(batch_obs, batch_acts)])
+        if self.continuous:
+            state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (np.round(a, decimals=2),)] for obs, a in zip(batch_obs, batch_acts)])
+        else:
+            state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (int(a),)] for obs, a in zip(batch_obs, batch_acts)])
         ucb_bonus = self.ucb_coef / torch.sqrt(state_visit_count_tensor + 1)
 
         if self.continuous:
