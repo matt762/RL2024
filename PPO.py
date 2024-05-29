@@ -530,7 +530,7 @@ class PPO:
         plt.ylabel('Rewards')
         plt.tight_layout()
         name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './plots/' + name
+        location = './test/' + name
         plt.savefig(location)
         print('Plot saved at:', location)
 
@@ -553,10 +553,10 @@ if __name__ == "__main__":
     for seed in [42, 380, 479]: #[42,380,479]
         print('Seed:', seed)
         
-        env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+        env = gym.make('MountainCarContinuous-v0') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env, seed)
         model = PPO(env)
-        model._init_hyperparameters(timesteps_per_batch=1000, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.0, lr=0.005, anneal_lr=True, noise_coef=0, coloured_noise=False, beta=0, use_gae=True, gamma=0.95, lambda_gae=0.98, ucb_coef=0.01, num_minibatches=4, render=False)
+        model._init_hyperparameters(timesteps_per_batch=1000, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.0, lr=0.005, anneal_lr=True, noise_coef=0, coloured_noise=False, beta=0, use_gae=True, gamma=0.95, lambda_gae=0.98, ucb_coef=1, num_minibatches=4, render=False)
         # model._init_hyperparameters(timesteps_per_batch=50, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01,lr=0.005, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
         model.learn(150000)
         
