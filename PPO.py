@@ -1,3 +1,6 @@
+# This implementation is based on the tutorial of Eric Yang Yu, published in Analytics Vidhya on Sep17, 2020
+# URL https://medium.com/analytics-vidhya/coding-ppo-from-scratch-with-pytorch-part-1-4-613dfc1b14c8
+
 import torch
 import torch.nn as nn
 from torch.distributions import MultivariateNormal, Categorical
@@ -32,7 +35,7 @@ class FeedForwardNN(nn.Module):
 
         return output
     
-# other possible NN to add a linear layer and tanh at the end
+# other possible NN implementation including an additional linear layer and tanh activation function at the end
 class FeedForwardNN2(nn.Module):
     def __init__(self, in_dim, out_dim):
         super(FeedForwardNN, self).__init__()
@@ -115,7 +118,6 @@ class PPO:
                 V = self.critic(batch_obs).squeeze()
                 batch_rewtogo = Adv_k + V.detach()
 
-            # actual_time_step += np.sum(batch_lens)
             actual_iteration += 1
             
             # Normalize the advantage (to stabilize learning)
@@ -288,7 +290,7 @@ class PPO:
                 noise = self._generate_colored_noise(size=action.detach().numpy().shape)
                 action = np.clip(action + noise, self.env.action_space.low, self.env.action_space.high)
 
-            return action.detach().numpy(), log_prob.detach() # vérifier si on doit retourner avec les detach et numpy ou pas
+            return action.detach().numpy(), log_prob.detach()
         
         else:
             action_probs = torch.nn.functional.softmax(mean, dim=-1)
@@ -299,10 +301,11 @@ class PPO:
             # noise addition if coef > 0 / pick a completely rdm action with probability exploration_noise
             if np.random.rand() < self.noise_coef:
                 action = np.random.randint(0, self.act_dim)
-                log_prob = torch.log(torch.tensor(1/self.act_dim)) # NOT SURE
+                log_prob = torch.log(torch.tensor(1/self.act_dim))
 
             return action, log_prob.detach()
         
+    # Test of generating colored_noise
     def _generate_colored_noise(self, size):
         white_noise = np.random.normal(0, self.noise_coef * self.env.action_space.high, size=size)
         frequency = np.fft.fftfreq(size[-1])
@@ -418,31 +421,32 @@ class PPO:
         # Incorporate entropy, if coef = 0, as if no entropy incroporated. 0.01 is advised
         self.entropy_coef = ent_coef # A high coefficient penalized over deterministic policis --> more exploration. Useful for more complex environment
         
-        # 0.2 is advised (paper)
+        # Clip surrogate loss, 0.2 is advised
         self.clip = clip
 
         # Possibility to use learning rate annealing
         self.anneal_lr = anneal_lr
 
         # Probably won't change
-        self.nb_epochs_per_iteration = 3 # try to change it
-        self.lr = lr # try to change it 3e-4 for the pendulum, 5e-3 for mountaincarcontinuous
-        self.max_grad_norm = 1.0 # try to change it # add of cliping gradient for preventing exploding gradient --> more stable learning
+        self.nb_epochs_per_iteration = 3
+        self.lr = lr
+        self.max_grad_norm = 1.0 # add of cliping gradient for preventing exploding gradient --> more stable learning
 
         # Possibility to incorporate White and Coloured noise exploration
         self.beta = beta # 0.5 is advised
         self.coloured_noise = coloured_noise
         self.noise_coef = noise_coef
         # in the case of white noise discrete env : probability noise_coef to pick a full random action
-        # in the case of white noise continuous env : sample from a gaussian with mean 0 and std dev being noise_coef % of the half possible action interval
-        # for example if action space between -1 and 1, noise_coef = 0.1, then std dev of the gaussian is 0.1 (10 % of half interval)
-        #             if action space between -2 and 2, noise_coef = 0.1, then std dev of the gaussian is 0.2 (10 % of half interval)
-        # in the case of coloured noise continuous env : 
+        # in the case of white noise continuous env : sample from a gaussian with mean 0 and std dev being noise_coef% of the max possible action value
+        # for example if action space between -1 and 1, noise_coef = 0.1, then std dev of the gaussian is 0.1 (10 % of max value)
+        #             if action space between -2 and 2, noise_coef = 0.1, then std dev of the gaussian is 0.2 (10 % of max value)
+        # in the case of coloured noise, noise_coef is used to scale the value of added noise
 
+        # Delayed reward value
+        self.gamma = gamma
         
         # Use the generalized advantage estimation
         self.use_gae = use_gae
-        self.gamma = gamma
         self.lambda_gae = lambda_gae
         
         # UCB bonus coefficient
@@ -454,16 +458,7 @@ class PPO:
         # Use render
         self.render = render
         self.render_every_i = 20
-        
-    
-        '''
-        # Seed management
-        self.seed = 42 # to set seed for reproductibility
-        if self.seed is not None:
-            assert(type(self.seed) == int)
-            # set seed
-            torch.manual_seed(self.seed)
-            print(f"Successfully set seed to {self.seed}")'''
+
         
     def plot_rewards_time_steps(self,seed_rewards, seed_time_steps, individual = False):
         
@@ -537,7 +532,7 @@ class PPO:
         plt.savefig(location)
         print('Plot saved at:', location)
 
-
+# For top reproductibility, setting every random generator to a constant seed
 def set_seed(env, seed):
     env.seed(seed)
     np.random.seed(seed)
@@ -550,21 +545,21 @@ def set_seed(env, seed):
     torch.backends.cudnn.deterministic = True
 
 if __name__ == "__main__":
+
+    TOTAL_TIMESTEPS = 150000 # Number of total timesteps for training
     
     seed_rewards = []
     seed_time_steps = []
-    for seed in [42, 380, 479]: #[42,380,479]
+    for seed in [42, 380, 479]:
         print('Seed:', seed)
         
-        env = gym.make('MountainCarContinuous-v0') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+        env = gym.make('CartPole-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / Acrobot-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env, seed)
         model = PPO(env)
-        model._init_hyperparameters(timesteps_per_batch=1000, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.0, lr=0.005, anneal_lr=True, noise_coef=0, coloured_noise=False, beta=0, use_gae=True, gamma=0.95, lambda_gae=0.98, ucb_coef=1, num_minibatches=4, render=False)
-        # model._init_hyperparameters(timesteps_per_batch=50, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01,lr=0.005, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
-        model.learn(150000)
+        model._init_hyperparameters(timesteps_per_batch=50, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01, lr=0.005, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
+        model.learn(total_timesteps=TOTAL_TIMESTEPS)
         
         seed_rewards.append(model.episode_rewards)
-        
         # seed_time_steps.append(model.time_step_episode)
         
     model.plot_rewards_episodes(seed_rewards, individual = False)
