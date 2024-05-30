@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 from .DQN import DQN
 from .ReplayMemory import ReplayMemory, Transition
@@ -28,25 +28,11 @@ class DQN_Optimizer(object):
     # Implementation of Deep Q learning based on https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html tutorial
     # with some adaptations to fit better the original algorithm from the paper 
     # "Playing Atari with Deep Reinforcement Learning, Mnih et al." https://arxiv.org/abs/1312.5602
+    # Here, double Q networks are used, the epsilon greedy decay logic was adapted, 
+    # a function to fill the replay memory completely was also added along with utility functions
     def __init__(self, env, seed, param_dict = None):
-        # Initialize gymnasium environment
-        self.env = env
 
-        # Define seeds
-        state, _ = env.reset(seed=seed)
-        self.set_seed(seed=seed)
-
-        n_actions = env.action_space.n
-        n_observations = len(state)
-
-
-
-        # Initialize the double DQnetwork 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print("pytorch will run on {}".format(self.device))
-        self.policy_network = DQN(n_observations, n_actions).to(self.device)
-        self.target_network = DQN(n_observations, n_actions).to(self.device)
-        self.target_network.load_state_dict(self.policy_network.state_dict())
+        ## Setup param_dict if none provided
         if param_dict == None:
             self.param_dict = {
                 "batch_size" : 32,
@@ -60,21 +46,56 @@ class DQN_Optimizer(object):
                 "replay_memory_size" : 100000,
                 "optimizer" : "adam",
                 "fill_rp_memory" : True,
+                "is_continuous" : False,
+                "nb_disc_steps" : 5
                 }
         else:
             self.param_dict = param_dict
+
+        # Initialize gymnasium environment
+        self.env = env
+        self.continous = self.param_dict.get("is_continuous")
+        if self.continous:
+            self.prepare_for_discrete()
+        else:
+            self.n_actions = env.action_space.n
+
+        # Define seeds
+        state, _ = env.reset(seed=seed)
+        self.set_seed(seed=seed)
+
+        n_observations = len(state)
+
+        # Initialize the double DQnetwork 
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print("pytorch will run on {}".format(self.device))
+        self.policy_network = DQN(n_observations, self.n_actions).to(self.device)
+        self.target_network = DQN(n_observations, self.n_actions).to(self.device)
+        self.target_network.load_state_dict(self.policy_network.state_dict())
+
         self.memory = ReplayMemory(self.param_dict.get("replay_memory_size"))
+        self.epsilon = param_dict.get("eps_start")
+        self.set_optimizer(self.param_dict.get("optimizer"))
+
+        if ( not torch.cuda.is_available() and param_dict.get("train_episodes") > 50):
+            print("The specified number of episodes might be big for optimization on cpu")
+
         self.steps_done = 0
         self.episode_durations = []
         self.epsilons = []
-        self.epsilon = param_dict.get("eps_start")
-        self.set_optimizer(self.param_dict.get("optimizer"))
-        if ( not torch.cuda.is_available() and param_dict.get("train_episodes") > 50):
-            print("The specified number of episodes might be big for optimization on cpu")
+        self.episode_steps = []
         self.episode_cumulative_reward = []
 
-        self.epsilon = param_dict.get("eps_start")
             
+
+    def prepare_for_discrete(self):
+        self.n_actions = self.param_dict.get("nb_disc_steps")
+        high_bounds = self.env.action_space.high
+        low_bounds = self.env.action_space.low
+        self.disc_actions_array = np.zeros([self.n_actions,self.param_dict.get("nb_disc_steps")])
+
+        for idx, (lb, hb) in enumerate(zip(low_bounds, high_bounds)):
+            self.disc_actions_array[idx] = np.linspace(lb,hb, self.param_dict.get("nb_disc_steps"))
         
     def set_seed(self, seed):
         np.random.seed(seed)
@@ -113,7 +134,7 @@ class DQN_Optimizer(object):
                 train_progress.set_description("Current train episode eps : {:.2f}".format(self.epsilon))
                 # Select action and collect reward 
                 action = self.select_eps_greedy_action(state)
-                observation, reward, terminated, truncated, _ = self.env.step(action.item())
+                observation, reward, terminated, truncated = self.perform_env_step(action)
                 episode_reward += reward
                 self.steps_done += 1
                 reward = torch.tensor([reward], device = self.device)
@@ -134,6 +155,7 @@ class DQN_Optimizer(object):
                     self.episode_durations.append(t+1)
                     self.episode_cumulative_reward.append(episode_reward)
                     self.epsilons.append(self.epsilon)
+                    self.episode_steps.append(self.steps_done)
                     break
             self.update_epsilon()
 
@@ -158,11 +180,25 @@ class DQN_Optimizer(object):
                 return torch.argmax(self.policy_network(state)).reshape(1,1)
         else:
             # explore otherwise
-            return torch.tensor([[self.env.action_space.sample()]], device = self.device, dtype=torch.long)
+            return self.select_random_action()
         
 
     def select_random_action(self):
-        return torch.tensor(self.env.action_space.sample(), device = self.device).reshape(1,1)
+
+        if self.continous:
+            random_action = torch.tensor(np.random.randint(self.param_dict.get("nb_disc_steps")),device = self.device, dtype = torch.long).reshape(1,1)
+        else:
+            random_action = torch.tensor([[self.env.action_space.sample()]], device = self.device, dtype=torch.long)
+        return random_action
+
+
+    def perform_env_step(self, action):
+        if self.continous:
+            action_arr = [self.disc_actions_array[0,action.item()]]
+            observation, reward, terminated, truncated, _ = self.env.step(action_arr)
+        else:
+            observation, reward, terminated, truncated, _ = self.env.step(action.item())
+        return observation, reward, terminated, truncated
 
     def fill_buffer_memory(self):
         terminated = False
@@ -175,7 +211,7 @@ class DQN_Optimizer(object):
                 state = torch.tensor(state, dtype=torch.float32, device = self.device).unsqueeze(0)
             
             action = self.select_random_action()
-            next_state, reward, terminated, truncated, _ = self.env.step(action.item())
+            next_state, reward, terminated, truncated = self.perform_env_step(action)
             reward = torch.tensor([reward], device = self.device)
             
 
@@ -202,9 +238,9 @@ class DQN_Optimizer(object):
         next_state_values = torch.zeros(self.param_dict.get("batch_size"), device = self.device)
         with torch.no_grad():
             next_state_values[non_final_mask] = self.target_network(non_final_next_states).max(1).values
-        expected_state_action_values = (next_state_values*self.param_dict["gamma"] + reward_batch)
-
+        expected_state_action_values = (next_state_values*self.param_dict["gamma"] + reward_batch).to(torch.float32)
         criterion = nn.MSELoss()
+
         loss = criterion(state_action_values, expected_state_action_values.unsqueeze(1))
 
         self.optimizer.zero_grad()
@@ -234,7 +270,7 @@ class DQN_Optimizer(object):
             for t in count():
                 state = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
                 action = self.select_eps_greedy_action(state, eps=0)
-                state, reward, terminated, truncated, _ = self.env.step(action.item())
+                state, reward, terminated, truncated= self.perform_env_step(action)
                 episode_rewards += reward
                 if terminated or truncated:
                     break
