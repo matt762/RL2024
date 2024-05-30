@@ -13,6 +13,7 @@ import gym
 import random
 import seaborn as sns
 import pandas as pd
+from scipy.signal import lfilter
 
 class FeedForwardNN(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -96,6 +97,9 @@ class PPO:
         self.time_step_episode = []
         
         self.state_visit_count = defaultdict(int)
+
+        self.noise_array = self.generate_colored_noise()
+        print(len(self.noise_array))
 
     def learn(self, total_timesteps):
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, {self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
@@ -285,7 +289,8 @@ class PPO:
 
             # Coloured noise addition
             else:
-                noise = self._generate_colored_noise(size=action.detach().numpy().shape)
+                noise = self.noise_array[self.actual_time_step % len(self.noise_array)]
+                #print("noise = ", noise)
                 action = np.clip(action + noise, self.env.action_space.low, self.env.action_space.high)
 
             return action.detach().numpy(), log_prob.detach() # vérifier si on doit retourner avec les detach et numpy ou pas
@@ -323,8 +328,11 @@ class PPO:
         mean = self.actor(batch_obs)
         
         #  Compute the UCB bonus
-        state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (int(a),)] for obs, a in zip(batch_obs, batch_acts)])
-        ucb_bonus = self.ucb_coef / torch.sqrt(state_visit_count_tensor + 1)
+        if self.continuous:
+            state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (np.round(a, decimals=2),)] for obs, a in zip(batch_obs, batch_acts)])
+        else:
+            state_visit_count_tensor = torch.tensor([self.state_visit_count[tuple(int(np.round(o, decimals=2)*100) for o in obs) + (int(a),)] for obs, a in zip(batch_obs, batch_acts)])
+        ucb_bonus = self.ucb_coef / torch.sqrt(state_visit_count_tensor + 1) # + 1 to ensure no division
 
         if self.continuous:
             distrib = MultivariateNormal(mean, self.cov_mat)
@@ -534,6 +542,16 @@ class PPO:
         plt.savefig(location)
         print('Plot saved at:', location)
 
+    def generate_colored_noise(self):
+        white = np.random.normal(size=(TOTAL_TIMESTEPS, self.act_dim))
+        b = [0.02109238, 0.07113478, 0.68873558, -0.18234586, -0.10213203]
+        a = [1, -0.131106, 0.20236, -0.0336, -0.0117]
+        pink = np.zeros_like(white)
+        for d in range(self.act_dim):
+            pink[:, d] = lfilter(b, a, white[:, d])
+        pink *= self.noise_coef
+        return pink
+
 
 def set_seed(env, seed):
     env.seed(seed)
@@ -546,19 +564,20 @@ def set_seed(env, seed):
     torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
 
+TOTAL_TIMESTEPS = 10000
 if __name__ == "__main__":
     
     seed_rewards = []
     seed_time_steps = []
-    for seed in [42, 380, 479]: #[42,380,479]
+    for seed in [42]: #[42,380,479]
         print('Seed:', seed)
         
-        env = gym.make('Pendulum-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
+        env = gym.make('Acrobot-v1') # Possible env : Pendulum-v1 (continuous)/ CartPole-v1 (discrete) / MountainCarContinuous-v0 (continuous) / MountainCar-v0 (discrete)
         set_seed(env, seed)
         model = PPO(env)
-        model._init_hyperparameters(timesteps_per_batch=1000, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.0, lr=0.005, anneal_lr=True, noise_coef=0, coloured_noise=False, beta=0, use_gae=True, gamma=0.95, lambda_gae=0.98, ucb_coef=0.01, num_minibatches=4, render=False)
+        model._init_hyperparameters(timesteps_per_batch=300, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01, lr=0.005, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
         # model._init_hyperparameters(timesteps_per_batch=50, max_timesteps_per_episode=500, clip=0.2, ent_coef=0.01,lr=0.005, anneal_lr=True, noise_coef=0.0, coloured_noise=False, beta=0, use_gae=True, gamma=0.99, lambda_gae=0.95, ucb_coef=0.001, num_minibatches=4, render=False)
-        model.learn(150000)
+        model.learn(total_timesteps=TOTAL_TIMESTEPS)
         
         seed_rewards.append(model.episode_rewards)
         
