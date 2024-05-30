@@ -512,7 +512,7 @@ class PPO:
         plt.ylabel('Rewards')
         plt.tight_layout()
         name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './plots/' + name
+        location = name
         plt.savefig(location)
         
     def plot_rewards_episodes(self, seed_rewards, individual = False):
@@ -546,7 +546,7 @@ class PPO:
         plt.ylabel('Rewards')
         plt.tight_layout()
         name = 'n_' + str(self.timesteps_per_batch)  + '_clip'  + str(self.clip) + '_ent' + str(self.entropy_coef) + '_lr' + str(self.lr) + '_anneal' + str(self.anneal_lr) + '_n' + str(self.noise_coef) + '_col' + str(self.coloured_noise) + '_beta' + str(self.beta) + '_gae' + str(self.use_gae) + '_gam' + str(self.gamma) + '_lam' + str(self.lambda_gae) + '_ucb' + str(self.ucb_coef) + 'batch' + str(self.num_minibatches)  + '.png'
-        location = './test/' + name
+        location = name
         plt.savefig(location)
         print('Plot saved at:', location)
 
