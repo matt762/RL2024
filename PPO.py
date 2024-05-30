@@ -16,6 +16,7 @@ import gym
 import random
 import seaborn as sns
 import pandas as pd
+# from scipy.signal import lfilter
 
 class FeedForwardNN(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -99,6 +100,9 @@ class PPO:
         self.time_step_episode = []
         
         self.state_visit_count = defaultdict(int)
+
+        # Try generating correlated noise in advance
+        # self.noise_array = self.generate_colored_noise()
 
     def learn(self, total_timesteps):
         print(f"Learning... Running {self.max_timesteps_per_episode} timesteps per episode, {self.timesteps_per_batch} timesteps per batch for a total of {total_timesteps} timesteps")
@@ -288,6 +292,7 @@ class PPO:
             # Coloured noise addition
             else:
                 noise = self._generate_colored_noise(size=action.detach().numpy().shape)
+                # noise = self.noise_array[self.actual_time_step % len(self.noise_array)]
                 action = np.clip(action + noise, self.env.action_space.low, self.env.action_space.high)
 
             return action.detach().numpy(), log_prob.detach()
@@ -317,6 +322,19 @@ class PPO:
         colored_noise *= 8e-11
         # print("color", colored_noise)
         return colored_noise
+    
+    '''
+    Second tentative of generating colored noise
+    def generate_colored_noise(self):
+        white = np.random.normal(size=(TOTAL_TIMESTEPS, self.act_dim))
+        b = [0.02109238, 0.07113478, 0.68873558, -0.18234586, -0.10213203]  # filter value
+        a = [1, -0.131106, 0.20236, -0.0336, -0.0117]                       # filter value
+        pink = np.zeros_like(white)
+        for d in range(self.act_dim):
+            pink[:, d] = lfilter(b, a, white[:, d])
+        pink *= self.noise_coef
+        return pink
+    '''
         
     def evaluate(self, batch_obs, batch_acts):
         # Query value V for each obs from critic nn
